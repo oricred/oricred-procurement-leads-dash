@@ -62,7 +62,7 @@ async def list_opportunities(
         q = q.where(Opportunity.kanban_stage == stage)
     if assigned_to:
         q = q.where(Opportunity.assigned_to == assigned_to)
-    q = q.order_by(Opportunity.updated_at.desc())
+    q = q.order_by(Opportunity.buyer_preference_score.desc().nulls_last(), Opportunity.updated_at.desc())
 
     result = await db.execute(q)
     opportunities = result.scalars().all()

@@ -407,6 +407,14 @@ function ScoringTab() {
                 onChange={e => setForm(f => ({ ...f, buyer_preference: { ...buyerPref, soe_bonus: +e.target.value } }))}
                 className="w-32 bg-surface-300 border border-surface-400 rounded px-2 py-1.5 text-sm text-white"
               />
+              <div className="mt-3">
+                <label className="block text-xs text-gray-400 mb-1">Min Preference Score (tenders below this are filtered out)</label>
+                <input
+                  type="number" min="0" max="100" value={buyerPref.min_preference_score as number}
+                  onChange={e => setForm(f => ({ ...f, buyer_preference: { ...buyerPref, min_preference_score: +e.target.value } }))}
+                  className="w-32 bg-surface-300 border border-surface-400 rounded px-2 py-1.5 text-sm text-white"
+                />
+              </div>
             </div>
             <div>
               <label className="block text-xs text-gray-400 mb-1">Preferred Buyers (one per line — name or org ID)</label>

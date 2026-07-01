@@ -68,6 +68,7 @@ DEFAULT_SCORING = {
         "preferred_buyers": [],
         "soe_bonus": 20,
         "default_province_weight": 40,
+        "min_preference_score": 0,
     },
 }
 

@@ -71,3 +71,49 @@ async def compute_buyer_preference(
         score += soe_bonus
 
     return round(min(score, 100), 2)
+
+
+async def evaluate_tender_preference(
+    province: str | None,
+    buyer_org_id: str | None,
+    db: AsyncSession,
+    config: dict | None = None,
+) -> float:
+    from app.services.admin_config import get_config
+    if config is None:
+        scoring_config = await get_config("admin_scoring", db)
+        config = scoring_config.get("buyer_preference", {})
+
+    if not config.get("enabled", True):
+        return 0.0
+
+    province_weights = config.get("province_weights", {})
+    default_weight = config.get("default_province_weight", 40)
+    preferred_buyers = config.get("preferred_buyers", [])
+    soe_bonus = config.get("soe_bonus", 20)
+
+    score = 0.0
+
+    province_score = province_weights.get(province.lower(), default_weight) if province else default_weight
+    score += province_score
+
+    is_preferred = False
+    is_soe = False
+
+    if buyer_org_id:
+        org_result = await db.execute(
+            select(Organization).where(Organization.id == buyer_org_id)
+        )
+        org = org_result.scalar_one_or_none()
+        if org:
+            if org.organization_type == "soe":
+                is_soe = True
+            if org.name in preferred_buyers or org.id in preferred_buyers:
+                is_preferred = True
+
+    if is_preferred:
+        score += soe_bonus * 1.5
+    elif is_soe:
+        score += soe_bonus
+
+    return round(min(score, 100), 2)

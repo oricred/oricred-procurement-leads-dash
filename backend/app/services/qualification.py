@@ -96,6 +96,22 @@ class RiskExclusionFilter(FilterHandler):
         return FilterResult(passed=True)
 
 
+class PreferenceFilter(FilterHandler):
+    async def evaluate(self, tender: Tender, rules: list[dict], db: AsyncSession | None = None) -> FilterResult:
+        if not db:
+            return FilterResult(passed=True)
+        min_score = None
+        for rule in rules:
+            min_score = rule.get("min_score")
+        if min_score is None or min_score <= 0:
+            return FilterResult(passed=True)
+        from app.services.buyer_preference import evaluate_tender_preference
+        score = await evaluate_tender_preference(tender.province, tender.buyer_org_id, db)
+        if score < min_score:
+            return FilterResult(passed=False, failed_filter="preference", reason=f"Preference score {score} below minimum {min_score}")
+        return FilterResult(passed=True)
+
+
 class QualificationService:
     _config_cache: dict | None = None
     _config_cache_time: float = 0
@@ -127,6 +143,7 @@ class QualificationService:
             "entity_type": EntityTypeFilter(),
             "bee_level": BEEFilter(),
             "risk_exclusion": RiskExclusionFilter(),
+            "preference": PreferenceFilter(),
         }
 
         for filter_name, filter_def in config.items():
@@ -171,5 +188,9 @@ class QualificationService:
             "risk_exclusion": {
                 "enabled": True,
                 "rules": [{"exclude_if_restricted": True, "max_forensic_score": 70.0}],
+            },
+            "preference": {
+                "enabled": True,
+                "rules": [{"min_score": 0}],
             },
         }
