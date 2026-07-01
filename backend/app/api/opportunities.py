@@ -11,7 +11,7 @@ from app.models.award import Award
 from app.models.tender import Tender
 from app.models.company import Company
 from app.models.organization import Organization
-from app.schemas.opportunity import OpportunityRead, OpportunityStageUpdate, OpportunityList
+from app.schemas.opportunity import OpportunityRead, OpportunityStageUpdate, OpportunityUpdate, OpportunityList, AuditEntry
 from app.schemas.buyer_relationship import BuyerRelationshipRead
 from app.services.buyer_relationship import compute_relationship, get_relationship
 from app.services.funding_suitability import compute_funding_suitability
@@ -43,6 +43,7 @@ def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: 
         win_probability=opp.win_probability,
         funding_suitability=opp.funding_suitability,
         buyer_preference_score=opp.buyer_preference_score,
+        related_bidders=opp.related_bidders,
         days_since_award=days_since,
         notes=opp.notes,
         created_at=opp.created_at,
@@ -164,6 +165,37 @@ async def assign_opportunity(opportunity_id: str, assignee: str, db: AsyncSessio
     await db.commit()
     await push_opportunity_to_crm(opportunity_id)
     return {"status": "ok", "assigned_to": assignee}
+
+
+@router.patch("/{opportunity_id}", response_model=OpportunityRead)
+async def update_opportunity(opportunity_id: str, body: OpportunityUpdate, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Opportunity).where(Opportunity.id == opportunity_id))
+    opp = result.scalar_one_or_none()
+    if not opp:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+    if body.notes is not None:
+        opp.notes = body.notes
+    if body.risk_flag is not None:
+        if body.risk_flag not in ("red", "amber", "green"):
+            raise HTTPException(status_code=400, detail="Invalid risk_flag")
+        opp.risk_flag = body.risk_flag
+    if body.assigned_to is not None:
+        opp.assigned_to = body.assigned_to
+    opp.updated_at = datetime.now(timezone.utc)
+    opp.version += 1
+    await db.commit()
+    await db.refresh(opp)
+    return _opportunity_to_read(opp)
+
+
+@router.get("/{opportunity_id}/audit", response_model=list[AuditEntry])
+async def get_opportunity_audit(opportunity_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(OpportunityAudit)
+        .where(OpportunityAudit.opportunity_id == opportunity_id)
+        .order_by(OpportunityAudit.changed_at.desc())
+    )
+    return result.scalars().all()
 
 
 @router.get("/{opportunity_id}/relationship", response_model=BuyerRelationshipRead | None)

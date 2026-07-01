@@ -15,6 +15,7 @@ export interface Opportunity {
   win_probability: number | null;
   funding_suitability: number | null;
   buyer_preference_score: number | null;
+  related_bidders: { name: string; inferred: boolean; company_id?: string; resolved?: string; reason?: string }[] | null;
   days_since_award: number | null;
   notes: string | null;
   created_at: string;
@@ -99,6 +100,27 @@ export interface DashboardStats {
   total_opportunities: number;
   total_watching: number;
   past_due_count: number;
+}
+
+export interface AuditEntry {
+  id: string;
+  from_stage: string | null;
+  to_stage: string;
+  changed_by: string;
+  changed_at: string;
+}
+
+export interface PastDueEntry {
+  id: string;
+  tender_id: string;
+  tender_title: string;
+  estimated_value: number | null;
+  province: string | null;
+  buyer_org: string | null;
+  entered_queue_at: string;
+  poll_count_since_due: number;
+  resolution: string;
+  days_in_queue: number;
 }
 
 export interface User {

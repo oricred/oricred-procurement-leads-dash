@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Opportunity, Stage, RadarData, WatchlistItem, DashboardStats, User } from '../types';
+import type { Opportunity, Stage, RadarData, WatchlistItem, DashboardStats, User, AuditEntry, PastDueEntry } from '../types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -46,6 +46,10 @@ export const opportunities = {
     }),
   assign: (id: string, assignee: string) =>
     api.patch(`/opportunities/${id}/assign`, null, { params: { assignee } }),
+  update: (id: string, body: { notes?: string; risk_flag?: string }) =>
+    api.patch<Opportunity>(`/opportunities/${id}`, body),
+  getAudit: (id: string) =>
+    api.get<AuditEntry[]>(`/opportunities/${id}/audit`),
 };
 
 export const radar = {
@@ -83,6 +87,11 @@ export const admin = {
   updateUser: (userId: string, body: Record<string, string>) =>
     api.put<User>(`/admin/users/${userId}`, body),
   deleteUser: (userId: string) => api.delete(`/admin/users/${userId}`),
+  getFailedApiCalls: (resolved?: boolean) =>
+    api.get<{ items: Array<{ id: string; endpoint: string; error: string; attempts: number; failed_at: string; resolved: boolean }> }>(
+      '/admin/failed-api-calls',
+      { params: resolved !== undefined ? { resolved } : {} },
+    ),
 };
 
 export const buyerRelationships = {
@@ -98,6 +107,10 @@ export const buyerRelationships = {
       relevance_score: number | null;
       updated_at: string;
     } | null>(`/opportunities/${opportunityId}/relationship`),
+};
+
+export const pastDueQueue = {
+  list: () => api.get<{ items: PastDueEntry[] }>('/past-due'),
 };
 
 export const funding = {

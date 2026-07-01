@@ -22,6 +22,7 @@ class OpportunityRead(BaseModel):
     funding_suitability: Decimal | None = None
     buyer_preference_score: Decimal | None = None
     days_since_award: int | None = None
+    related_bidders: list[dict] | None = None
     notes: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -36,6 +37,18 @@ class OpportunityCreate(BaseModel):
 
 class OpportunityUpdate(BaseModel):
     notes: str | None = None
+    risk_flag: str | None = None
+    assigned_to: str | None = None
+
+
+class AuditEntry(BaseModel):
+    id: str
+    from_stage: str | None = None
+    to_stage: str
+    changed_by: str
+    changed_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class OpportunityStageUpdate(BaseModel):

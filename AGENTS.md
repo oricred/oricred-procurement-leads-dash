@@ -59,12 +59,26 @@ oricred/
 - [x] Municipal scraper adapter foundation (abstract + Joburg/Cape Town stubs)
 - [x] Frontend: funding suitability badge on kanban cards
 - [x] Frontend: buyer relationship panel in opportunity modal
+- [x] Admin UI (7 tabs): Credentials, Filter Config, Sources, Notifications, Scoring, Jobs, Users
+- [x] CRM item ID persistence + deduplication (`sync.py` writes `crm_item_id`)
+- [x] CRM push to `PATCH /opportunities/{id}/assign` endpoint
+- [x] Municipal scrapers wired into discovery job (reads config from DB)
+- [x] Monday.com activity detail display in opportunity modal (column changes with old→new)
+- [x] Buyer preference scoring (province weights, SOE bonus, preferred buyers)
+- [x] Sources tab renamed from Scrapers → Sources with OCPO, e-Tenders, TSA-OCP config
+- [x] Monday.com fully configurable via admin UI (API key, board ID, group ID)
+- [x] Competitor Intel wired into award_check + displayed in modal (confirmed + speculative)
+- [x] `PATCH /opportunities/{id}` for notes/risk_flag/assigned_to editing
+- [x] `GET /opportunities/{id}/audit` endpoint + audit history panel in modal
+- [x] Past-due queue API + frontend page (`/past-due` route with auto-refresh)
+- [x] Dead-letter queue: `FailedApiCall` writes in TSAClient on retry exhaustion
+- [x] `GET /admin/failed-api-calls` endpoint for dead-letter management
+- [x] Inline notes editing in opportunity modal (edit/save/cancel)
 
 ### Remaining
 - [ ] Real municipal scraper implementations (at least City of Joburg + Cape Town)
-- [ ] Hook CRM push into opportunity creation/stage changes (real-time sync)
-- [ ] Monday.com activity displayed in card expansion
 - [ ] Tests for new services
+- [ ] Dead-letter retry button (re-queue failed API calls)
 
 ## Deployment
 - **Service**: systemd `oricred-backend.service`, uvicorn on `127.0.0.1:8000`

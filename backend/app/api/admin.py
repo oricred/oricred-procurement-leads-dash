@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.filter_config import FilterConfig
 from app.models.job_run import JobRun
+from app.models.failed_api_call import FailedApiCall
 from app.models.user import User
 from app.api.auth import get_current_user
 from app.schemas.auth import UserRead
@@ -260,3 +261,25 @@ async def delete_user(user_id: str, db: AsyncSession = Depends(get_db), current_
     await db.execute(delete(User).where(User.id == user_id))
     await db.commit()
     return {"status": "deleted"}
+
+
+@router.get("/failed-api-calls")
+async def get_failed_api_calls(limit: int = 50, resolved: bool | None = None, db: AsyncSession = Depends(get_db)):
+    q = select(FailedApiCall).order_by(FailedApiCall.failed_at.desc())
+    if resolved is not None:
+        q = q.where(FailedApiCall.resolved == resolved)
+    result = await db.execute(q.limit(limit))
+    rows = result.scalars().all()
+    return {
+        "items": [
+            {
+                "id": str(r.id),
+                "endpoint": r.endpoint,
+                "error": r.error,
+                "attempts": r.attempts,
+                "failed_at": r.failed_at.isoformat(),
+                "resolved": r.resolved,
+            }
+            for r in rows
+        ]
+    }

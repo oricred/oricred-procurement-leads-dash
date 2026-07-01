@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -23,6 +24,7 @@ class TSAClient:
 
     async def request(self, method: str, path: str, **kwargs: Any) -> dict:
         last_exception: Exception | None = None
+        last_status = None
         for attempt in range(self.MAX_RETRIES + 1):
             try:
                 response = await self._client.request(method, path, **kwargs)
@@ -34,6 +36,7 @@ class TSAClient:
                 response.raise_for_status()
                 return response.json()
             except httpx.HTTPStatusError as e:
+                last_status = e.response.status_code
                 if e.response.status_code in (401, 403, 404):
                     logger.error("api_auth_error", status=e.response.status_code, path=path)
                     raise
@@ -42,6 +45,7 @@ class TSAClient:
                     logger.warning("api_retry", attempt=attempt + 1, delay=delay, path=path)
                     await asyncio.sleep(delay)
                 else:
+                    await self._record_failure(path, kwargs, str(e), self.MAX_RETRIES + 1)
                     raise
             except (httpx.TimeoutException, httpx.NetworkError) as e:
                 last_exception = e
@@ -49,7 +53,27 @@ class TSAClient:
                     delay = self.RETRY_DELAYS[attempt]
                     logger.warning("api_retry_network", attempt=attempt + 1, delay=delay, path=path)
                     await asyncio.sleep(delay)
+                else:
+                    await self._record_failure(path, kwargs, str(e), self.MAX_RETRIES + 1)
+        if last_exception:
+            await self._record_failure(path, kwargs, str(last_exception), self.MAX_RETRIES + 1)
         raise last_exception  # type: ignore
+
+    async def _record_failure(self, path: str, params: dict, error: str, attempts: int):
+        try:
+            from app.database import async_session
+            from app.models.failed_api_call import FailedApiCall
+            async with async_session() as dl_db:
+                dl_db.add(FailedApiCall(
+                    endpoint=path,
+                    params=params,
+                    error=error[:500],
+                    attempts=attempts,
+                    failed_at=datetime.now(timezone.utc),
+                ))
+                await dl_db.commit()
+        except Exception as e:
+            logger.warning("failed_to_record_api_failure", error=str(e))
 
     async def close(self):
         await self._client.aclose()

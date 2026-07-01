@@ -130,6 +130,26 @@ async def check_awards_for_watching():
 
                         opp.buyer_preference_score = await compute_buyer_preference(str(opp.id), db)
 
+                        try:
+                            ci = CompetitorIntelService(db, tenders_client, companies_client, forensic_client)
+                            related = []
+                            try:
+                                if tender.closing_date and now > tender.closing_date:
+                                    related = [
+                                        {"name": c.name, "inferred": c.inferred, "company_id": c.company_id, "resolved": c.resolved, "reason": c.reason}
+                                        for c in await ci.get_confirmed_competitors(tender.api_id)
+                                    ]
+                                else:
+                                    related = [
+                                        {"name": c.name, "inferred": c.inferred, "company_id": c.company_id, "resolved": c.resolved, "reason": c.reason}
+                                        for c in await ci.get_speculative_competitors(tender.buyer_org_id, tender.category_id)
+                                    ]
+                            except Exception as e:
+                                logger.warning("related_bidders_fetch_failed", error=str(e))
+                            opp.related_bidders = related or None
+                        except Exception as e:
+                            logger.warning("competitor_intel_failed", error=str(e))
+
                         await email.send(
                             "award_detected",
                             "ops@oricred.com",

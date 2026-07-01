@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { X, Building2, Award, Users, FileText, TrendingUp, Shield, BarChart3, Activity } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { X, Building2, Award, Users, FileText, TrendingUp, BarChart3, Activity, History, Edit2 } from 'lucide-react';
 import { opportunities, buyerRelationships, crmActivity } from '../services/api';
 import type { Opportunity } from '../types';
 
@@ -43,6 +43,26 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
     role_based: 'text-amber-400',
     none: 'text-red-400',
   };
+
+  const queryClient = useQueryClient();
+  const [editingNotes, setEditingNotes] = useState(false);
+  const [notesDraft, setNotesDraft] = useState(opp.notes ?? '');
+
+  const { data: auditData } = useQuery({
+    queryKey: ['opportunity-audit', opp.id],
+    queryFn: async () => {
+      const res = await opportunities.getAudit(opp.id);
+      return res.data;
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (body: { notes?: string; risk_flag?: string }) => opportunities.update(opp.id, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['opportunity', opp.id] });
+      setEditingNotes(false);
+    },
+  });
 
   function relationshipStrength(score: number | null | undefined): { label: string; color: string } {
     if (score == null) return { label: 'N/A', color: 'text-gray-500' };
@@ -225,6 +245,54 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
           </div>
         </div>
 
+        {/* Related Bidders */}
+        {opp.related_bidders && opp.related_bidders.length > 0 && (
+          <div className="glass rounded-xl p-4 mt-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Users className="w-4 h-4 text-primary-400" />
+              <h3 className="text-sm font-semibold text-gray-200">Related Bidders</h3>
+            </div>
+            <p className="text-xs text-gray-500 mb-3">Other companies that bid on this tender — potential financing leads</p>
+            <div className="space-y-2 text-sm max-h-40 overflow-y-auto">
+              {opp.related_bidders.map((c, i) => (
+                <div key={i} className="flex items-start gap-2 text-xs border-b border-surface-300 pb-2 last:border-0">
+                  <span className="text-gray-200 font-medium">{c.name}</span>
+                  {c.resolved && <span className="text-gray-500">({c.resolved})</span>}
+                  {c.inferred ? (
+                    <span className="text-amber-400 text-[10px]">similar company</span>
+                  ) : (
+                    <span className="text-emerald-400 text-[10px]">confirmed bidder</span>
+                  )}
+                  {c.reason && <span className="text-gray-500">— {c.reason}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Audit History */}
+        {auditData && auditData.length > 0 && (
+          <div className="glass rounded-xl p-4 mt-4">
+            <div className="flex items-center gap-2 mb-3">
+              <History className="w-4 h-4 text-primary-400" />
+              <h3 className="text-sm font-semibold text-gray-200">Audit History</h3>
+            </div>
+            <div className="space-y-1 text-xs max-h-32 overflow-y-auto">
+              {auditData.map((a) => (
+                <div key={a.id} className="flex gap-2 text-gray-400">
+                  <span className="text-gray-600 font-mono shrink-0">
+                    {new Date(a.changed_at).toLocaleDateString()}
+                  </span>
+                  <span>
+                    {a.from_stage ? `${a.from_stage} → ` : ''}{a.to_stage}
+                  </span>
+                  <span className="text-gray-600">by {a.changed_by}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* CRM Activity */}
         {crmData?.activities != null && (
           <div className="glass rounded-xl p-4 mt-4">
@@ -268,15 +336,58 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
         )}
 
         {/* Notes */}
-        {opp.notes && (
-          <div className="glass rounded-xl p-4 mt-4">
-            <div className="flex items-center gap-2 mb-3">
+        <div className="glass rounded-xl p-4 mt-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
               <FileText className="w-4 h-4 text-primary-400" />
               <h3 className="text-sm font-semibold text-gray-200">Notes</h3>
             </div>
-            <p className="text-sm text-gray-300 whitespace-pre-wrap">{opp.notes}</p>
+            <button
+              onClick={() => {
+                if (editingNotes) {
+                  updateMutation.mutate({ notes: notesDraft });
+                } else {
+                  setNotesDraft(opp.notes ?? '');
+                  setEditingNotes(true);
+                }
+              }}
+              className="p-1 hover:bg-surface-300 rounded transition-colors text-gray-400 hover:text-gray-200"
+            >
+              <Edit2 className="w-3.5 h-3.5" />
+            </button>
           </div>
-        )}
+          {editingNotes ? (
+            <div className="space-y-2">
+              <textarea
+                className="w-full bg-surface-300 border border-surface-300 rounded-lg p-2 text-sm text-gray-200 resize-none focus:outline-none focus:border-primary-500"
+                rows={3}
+                value={notesDraft}
+                onChange={(e) => setNotesDraft(e.target.value)}
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    updateMutation.mutate({ notes: notesDraft });
+                    setEditingNotes(false);
+                  }}
+                  className="px-3 py-1 text-xs bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition-colors"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={() => setEditingNotes(false)}
+                  className="px-3 py-1 text-xs bg-surface-300 hover:bg-surface-200 text-gray-300 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-300 whitespace-pre-wrap min-h-[1em]">
+              {opp.notes || <span className="text-gray-500 italic">No notes</span>}
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );
