@@ -52,6 +52,23 @@ DEFAULT_SCORING = {
         "value_weight": 30,
         "win_rate_weight": 30,
     },
+    "buyer_preference": {
+        "enabled": True,
+        "province_weights": {
+            "gp": 100,
+            "wc": 85,
+            "kzn": 75,
+            "ec": 60,
+            "mp": 55,
+            "lp": 50,
+            "nw": 50,
+            "fs": 50,
+            "nc": 45,
+        },
+        "preferred_buyers": [],
+        "soe_bonus": 20,
+        "default_province_weight": 40,
+    },
 }
 
 DEFAULT_JOBS = {

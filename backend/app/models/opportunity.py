@@ -20,6 +20,7 @@ class Opportunity(Base):
     risk_flag: Mapped[str | None] = mapped_column(String(16), nullable=True)
     win_probability: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
     funding_suitability: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    buyer_preference_score: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

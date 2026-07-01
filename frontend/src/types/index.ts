@@ -14,6 +14,7 @@ export interface Opportunity {
   risk_flag: 'red' | 'amber' | 'green' | null;
   win_probability: number | null;
   funding_suitability: number | null;
+  buyer_preference_score: number | null;
   days_since_award: number | null;
   notes: string | null;
   created_at: string;

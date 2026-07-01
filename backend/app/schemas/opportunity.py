@@ -20,6 +20,7 @@ class OpportunityRead(BaseModel):
     risk_flag: str | None = None
     win_probability: Decimal | None = None
     funding_suitability: Decimal | None = None
+    buyer_preference_score: Decimal | None = None
     days_since_award: int | None = None
     notes: str | None = None
     created_at: datetime

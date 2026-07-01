@@ -15,6 +15,7 @@ from app.schemas.opportunity import OpportunityRead, OpportunityStageUpdate, Opp
 from app.schemas.buyer_relationship import BuyerRelationshipRead
 from app.services.buyer_relationship import compute_relationship, get_relationship
 from app.services.funding_suitability import compute_funding_suitability
+from app.services.buyer_preference import compute_buyer_preference
 from app.services.crm.sync import push_opportunity_to_crm
 
 router = APIRouter()
@@ -41,6 +42,7 @@ def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: 
         risk_flag=opp.risk_flag,
         win_probability=opp.win_probability,
         funding_suitability=opp.funding_suitability,
+        buyer_preference_score=opp.buyer_preference_score,
         days_since_award=days_since,
         notes=opp.notes,
         created_at=opp.created_at,
@@ -231,6 +233,23 @@ async def compute_opportunity_funding(opportunity_id: str, db: AsyncSession = De
     await db.commit()
 
     return {"funding_suitability": score}
+
+
+@router.post("/{opportunity_id}/compute-preference")
+async def compute_opportunity_preference(opportunity_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Opportunity).where(Opportunity.id == opportunity_id)
+    )
+    opp = result.scalar_one_or_none()
+    if not opp:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+
+    score = await compute_buyer_preference(opportunity_id, db)
+    opp.buyer_preference_score = score
+    opp.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return {"buyer_preference_score": score}
 
 
 @router.get("/{opportunity_id}/crm-activity")

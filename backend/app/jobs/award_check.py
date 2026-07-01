@@ -15,6 +15,7 @@ from app.models.past_due import PastDueQueue
 from app.services.contact_sufficiency import ContactSufficiencyService
 from app.services.competitor_intel import CompetitorIntelService
 from app.services.email_alert import EmailAlertService
+from app.services.buyer_preference import compute_buyer_preference
 from app.services.crm.sync import push_opportunity_to_crm
 
 logger = structlog.get_logger()
@@ -126,6 +127,8 @@ async def check_awards_for_watching():
                         )
                         db.add(opp)
                         await db.flush()
+
+                        opp.buyer_preference_score = await compute_buyer_preference(str(opp.id), db)
 
                         await email.send(
                             "award_detected",

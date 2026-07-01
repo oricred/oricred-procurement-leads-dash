@@ -324,6 +324,9 @@ function ScoringTab() {
 
   const fundingWeights = form.funding_suitability as Record<string, number> | undefined;
   const buyerWeight = form.buyer_relationship as Record<string, number> | undefined;
+  const buyerPref = form.buyer_preference as Record<string, unknown> | undefined;
+  const provinceWeights = buyerPref?.province_weights as Record<string, number> | undefined;
+  const preferredBuyers = (buyerPref?.preferred_buyers as string[]) || [];
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       <h2 className="text-lg font-semibold text-white mb-4">Scoring Weights</h2>
@@ -364,6 +367,57 @@ function ScoringTab() {
                 />
               </div>
             ))}
+          </div>
+        </div>
+      )}
+      {buyerPref && (
+        <div className="border-t border-surface-300 pt-6">
+          <h3 className="text-sm font-medium text-gray-300 mb-3">
+            Buyer Preference
+            <label className="ml-3 text-xs text-gray-500">
+              <input type="checkbox" checked={!!buyerPref.enabled} onChange={e => setForm(f => ({ ...f, buyer_preference: { ...buyerPref, enabled: e.target.checked } }))} className="mr-1.5 rounded" />
+              Enabled
+            </label>
+          </h3>
+          <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-3">
+              {provinceWeights && Object.entries(provinceWeights).map(([prov, weight]) => (
+                <div key={prov}>
+                  <label className="block text-xs text-gray-400 mb-1 uppercase">{prov}</label>
+                  <input
+                    type="number" min="0" max="100" value={weight}
+                    onChange={e => setForm(f => ({ ...f, buyer_preference: { ...buyerPref, province_weights: { ...provinceWeights, [prov]: +e.target.value } } }))}
+                    className="w-full bg-surface-300 border border-surface-400 rounded px-2 py-1.5 text-sm text-white"
+                  />
+                </div>
+              ))}
+              <div>
+                <label className="block text-xs text-gray-400 mb-1 uppercase">Default</label>
+                <input
+                  type="number" min="0" max="100" value={buyerPref.default_province_weight as number}
+                  onChange={e => setForm(f => ({ ...f, buyer_preference: { ...buyerPref, default_province_weight: +e.target.value } }))}
+                  className="w-full bg-surface-300 border border-surface-400 rounded px-2 py-1.5 text-sm text-white"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">SOE Bonus</label>
+              <input
+                type="number" min="0" max="100" value={buyerPref.soe_bonus as number}
+                onChange={e => setForm(f => ({ ...f, buyer_preference: { ...buyerPref, soe_bonus: +e.target.value } }))}
+                className="w-32 bg-surface-300 border border-surface-400 rounded px-2 py-1.5 text-sm text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Preferred Buyers (one per line — name or org ID)</label>
+              <textarea
+                value={preferredBuyers.join('\n')}
+                onChange={e => setForm(f => ({ ...f, buyer_preference: { ...buyerPref, preferred_buyers: e.target.value.split('\n').map(s => s.trim()).filter(Boolean) } }))}
+                rows={3}
+                className="w-full bg-surface-300 border border-surface-400 rounded-lg px-3 py-2 text-sm text-white"
+                placeholder="Eskom&#10;Transnet&#10;SABC"
+              />
+            </div>
           </div>
         </div>
       )}

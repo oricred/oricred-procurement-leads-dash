@@ -103,6 +103,8 @@ export const buyerRelationships = {
 export const funding = {
   compute: (opportunityId: string) =>
     api.post<{ funding_suitability: number }>(`/opportunities/${opportunityId}/compute-funding`),
+  computePreference: (opportunityId: string) =>
+    api.post<{ buyer_preference_score: number }>(`/opportunities/${opportunityId}/compute-preference`),
 };
 
 export const crmActivity = {

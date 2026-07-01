@@ -67,6 +67,11 @@ function CardContent({ opportunity: opp }: { opportunity: Opportunity }) {
             </span>
           ) : null;
         })()}
+        {opp.buyer_preference_score != null && opp.buyer_preference_score >= 70 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400 font-mono font-bold">
+            P{opp.buyer_preference_score >= 90 ? '★' : ''}
+          </span>
+        )}
         {opp.category && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-400 text-gray-400 uppercase">
             {opp.category.slice(0, 4)}

@@ -209,6 +209,18 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
                   {opp.win_probability != null ? `${opp.win_probability}%` : '—'}
                 </span>
               </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Buyer preference</span>
+                <span className={`font-mono font-bold ${
+                  opp.buyer_preference_score != null
+                    ? opp.buyer_preference_score >= 75 ? 'text-emerald-400'
+                    : opp.buyer_preference_score >= 50 ? 'text-amber-400'
+                    : 'text-red-400'
+                    : 'text-gray-200'
+                }`}>
+                  {opp.buyer_preference_score != null ? `${opp.buyer_preference_score}%` : '—'}
+                </span>
+              </div>
             </div>
           </div>
         </div>
