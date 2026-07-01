@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 import structlog
 from sqlalchemy import select
 
-from app.clients import TSAClient, TendersClient, ReferenceClient
+from app.clients import TSADatabase
 from app.database import async_session
 from app.models.tender import Tender
 from app.models.category import Category
@@ -24,9 +24,15 @@ SOURCE_MAP = {
     "tsa_ocp": ("api", "Tenders-SA OCP", None),
 }
 
+TENDER_FIELDS = [
+    "tender_id", "title", "description", "estimated_value", "province",
+    "category_id", "closing_date", "source_organization_id",
+    "source_organization", "type", "publication_date",
+]
+
 
 async def _process_tender(raw: dict, db, now: datetime) -> int:
-    api_id = raw.get("id")
+    api_id = raw.get("tender_id")
     if not api_id:
         return 0
 
@@ -34,11 +40,12 @@ async def _process_tender(raw: dict, db, now: datetime) -> int:
     if existing.scalar_one_or_none():
         return 0
 
-    org_id = raw.get("organization_id")
+    org_id = raw.get("source_organization_id")
+    org_name = raw.get("source_organization", org_id or "")
     if org_id:
         org_result = await db.execute(select(Organization).where(Organization.id == org_id))
         if not org_result.scalar_one_or_none():
-            db.add(Organization(id=org_id, name=raw.get("buyer_name", org_id)))
+            db.add(Organization(id=org_id, name=org_name))
 
     tender = Tender(
         api_id=api_id,
@@ -50,8 +57,8 @@ async def _process_tender(raw: dict, db, now: datetime) -> int:
         category_id=raw.get("category_id"),
         closing_date=raw.get("closing_date"),
         buyer_org_id=org_id,
-        tender_type=raw.get("tender_type"),
-        published_at=raw.get("published_at"),
+        tender_type=raw.get("type"),
+        published_at=raw.get("publication_date"),
         discovered_at=now,
     )
     db.add(tender)
@@ -119,37 +126,47 @@ async def _qualify_and_watch(tender: Tender, db, now: datetime) -> int:
 
 
 async def discover_new_tenders():
-    tsa = TSAClient()
-    tenders_client = TendersClient(tsa)
-    ref_client = ReferenceClient(tsa)
+    tsa_db = TSADatabase()
     logger.info("job_started", job="discover_tenders")
 
     try:
-        # Refresh reference data
+        # Refresh categories from TSA DB
         try:
-            cats = await ref_client.get_categories()
+            cats = await tsa_db.query_categories()
             async with async_session() as db:
                 for cat in cats:
-                    await db.merge(Category(id=cat["id"], name=cat.get("name", ""), parent_id=cat.get("parent_id"), raw_payload=cat))
+                    await db.merge(Category(
+                        id=cat["id"],
+                        name=cat.get("canonical_name") or cat.get("name", ""),
+                        parent_id=cat.get("parent_id"),
+                        raw_payload=cat,
+                    ))
                 await db.commit()
         except Exception as e:
             logger.warning("category_refresh_failed", error=str(e))
 
-        # Discover new tenders from Tenders-SA
         now = datetime.now(timezone.utc)
-        since = now
-        try:
-            raw_tenders = await tenders_client.get_new_tenders(since)
-        except Exception as e:
-            logger.error("tender_discovery_failed", error=str(e))
-            return
+        since = now.isoformat()
 
         async with async_session() as db:
             count = 0
+
+            # ── Query Tenders-SA database directly with SQL filters ──
+            try:
+                qual_config = await QualificationService(db).get_config()
+                raw_tenders = await tsa_db.query_tenders_from_config(
+                    config=qual_config,
+                    since=since,
+                    fields=TENDER_FIELDS,
+                )
+            except Exception as e:
+                logger.error("tender_query_failed", error=str(e))
+                raw_tenders = []
+
             for raw in raw_tenders:
                 count += await _process_tender(raw, db, now)
 
-            # Discover tenders from all sources
+            # ── Discover tenders from municipal scrapers ──
             try:
                 src_config = await get_config("admin_sources", db)
                 enabled = src_config.get("enabled", [])
@@ -185,13 +202,13 @@ async def discover_new_tenders():
                         await adapter.close()
 
                 elif src_type == "api":
-                    src_config = api_sources.get(src_key, {})
-                    if not src_config.get("enabled", False):
+                    src_cfg = api_sources.get(src_key, {})
+                    if not src_cfg.get("enabled", False):
                         continue
-                    logger.info("api_source_configured", source=src_key, name=src_name, base_url=src_config.get("base_url"))
+                    logger.info("api_source_configured", source=src_key, name=src_name, base_url=src_cfg.get("base_url"))
 
             await db.commit()
-            logger.info("tenders_discovered", new=count)
+            logger.info("tenders_discovered", new=count, queried=len(raw_tenders))
 
     finally:
-        await tsa.close()
+        await tsa_db.close()

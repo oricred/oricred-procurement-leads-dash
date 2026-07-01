@@ -1,3 +1,52 @@
+export interface AwardItem {
+  id: string;
+  supplier_name: string;
+  buyer_org_id: string | null;
+  buyer_org_name: string | null;
+  tender_title: string | null;
+  amount: number | null;
+  award_date: string | null;
+  bee_level: number | null;
+  source: string;
+  opportunity_id: string | null;
+}
+
+export interface TenderItem {
+  id: string;
+  title: string | null;
+  estimated_value: number | null;
+  province: string | null;
+  category_id: string | null;
+  category_name: string | null;
+  buyer_org_id: string | null;
+  buyer_org_name: string | null;
+  closing_date: string | null;
+  published_at: string | null;
+  tender_type: string | null;
+  discovered_at: string | null;
+  status: 'not_watched' | 'watching' | 'awarded' | 'past_due' | 'opportunity';
+  is_watching: boolean;
+  opportunity_id: string | null;
+}
+
+export interface Contact {
+  id: string;
+  company_id: string | null;
+  organization_id: string | null;
+  first_name: string;
+  last_name: string;
+  job_title: string | null;
+  email: string;
+  phone_direct: string | null;
+  phone_mobile: string | null;
+  linkedin_url: string | null;
+  is_primary: boolean;
+  notes: string | null;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Opportunity {
   id: string;
   tender_id: string | null;
@@ -16,6 +65,7 @@ export interface Opportunity {
   funding_suitability: number | null;
   buyer_preference_score: number | null;
   related_bidders: { name: string; inferred: boolean; company_id?: string; resolved?: string; reason?: string }[] | null;
+  contacts: Contact[];
   days_since_award: number | null;
   notes: string | null;
   created_at: string;
@@ -93,6 +143,8 @@ export interface WatchlistItem {
   days_overdue: number | null;
   progress_pct: number | null;
   label: string;
+  opportunity_id: string | null;
+  opportunity_count: number;
 }
 
 export interface DashboardStats {

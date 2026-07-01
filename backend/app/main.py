@@ -5,15 +5,32 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.database import init_db
+from sqlalchemy import select
+
+from app.database import init_db, async_session
+from app.models.user import User
 from app.api import router as api_router
+
+
+async def _ensure_admin_user():
+    async with async_session() as db:
+        result = await db.execute(select(User).limit(1))
+        if result.first():
+            return
+    from app.services.auth import AuthService
+    async with async_session() as db:
+        db.add(User(
+            email="admin@oricred.com", name="Admin",
+            hashed_password=AuthService.hash_password("admin123"),
+            role="admin",
+        ))
+        await db.commit()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    from app.seed import seed_defaults
-    await seed_defaults()
+    await _ensure_admin_user()
     from app.jobs.scheduler import start_scheduler
     scheduler = start_scheduler()
     yield

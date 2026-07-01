@@ -33,6 +33,25 @@ _migration_sql = """
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS buyer_preference_score NUMERIC(5,2);
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS related_bidders JSON;
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS crm_item_id VARCHAR(64);
+CREATE TABLE IF NOT EXISTS contacts (
+    id VARCHAR(36) PRIMARY KEY,
+    company_id VARCHAR(36),
+    organization_id VARCHAR(32),
+    first_name VARCHAR(128) NOT NULL,
+    last_name VARCHAR(128) NOT NULL,
+    job_title VARCHAR(256),
+    email VARCHAR(256) NOT NULL,
+    phone_direct VARCHAR(32),
+    phone_mobile VARCHAR(32),
+    linkedin_url VARCHAR(512),
+    is_primary BOOLEAN NOT NULL DEFAULT 0,
+    notes TEXT,
+    source VARCHAR(32) NOT NULL DEFAULT 'manual',
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(company_id, email),
+    UNIQUE(organization_id, email)
+);
 """
 
 

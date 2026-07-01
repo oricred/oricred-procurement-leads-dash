@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { opportunities } from '../services/api';
@@ -9,6 +10,7 @@ import OpportunityModal from '../components/OpportunityModal';
 import AwardRadar from '../components/AwardRadar';
 
 export default function PipelinePage() {
+  const [searchParams] = useSearchParams();
   const [activeCard, setActiveCard] = useState<Opportunity | null>(null);
   const [selectedOpp, setSelectedOpp] = useState<Opportunity | null>(null);
   const [showRadar, setShowRadar] = useState(true);
@@ -55,6 +57,14 @@ export default function PipelinePage() {
       queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
     },
   });
+
+  useEffect(() => {
+    const openId = searchParams.get('open');
+    if (openId && data?.items) {
+      const opp = data.items.find(o => o.id === openId);
+      if (opp) setSelectedOpp(opp);
+    }
+  }, [searchParams, data]);
 
   const grouped: Record<string, Opportunity[]> = {};
   for (const stage of STAGES) {

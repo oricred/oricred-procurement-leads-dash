@@ -20,6 +20,8 @@ class WatchlistItemRead(BaseModel):
     days_overdue: int | None = None
     progress_pct: int | None = None
     label: str = "On Track"
+    opportunity_id: str | None = None
+    opportunity_count: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -27,3 +29,11 @@ class WatchlistItemRead(BaseModel):
 class WatchlistList(BaseModel):
     items: list[WatchlistItemRead]
     total: int
+
+
+class WatchToggleRequest(BaseModel):
+    tender_id: str
+
+
+class WatchToggleResponse(BaseModel):
+    is_watching: bool

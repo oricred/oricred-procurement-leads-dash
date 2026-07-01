@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Opportunity, Stage, RadarData, WatchlistItem, DashboardStats, User, AuditEntry, PastDueEntry } from '../types';
+import type { Opportunity, Stage, RadarData, WatchlistItem, DashboardStats, User, AuditEntry, PastDueEntry, Contact, AwardItem, TenderItem } from '../types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -88,10 +88,12 @@ export const admin = {
     api.put<User>(`/admin/users/${userId}`, body),
   deleteUser: (userId: string) => api.delete(`/admin/users/${userId}`),
   getFailedApiCalls: (resolved?: boolean) =>
-    api.get<{ items: Array<{ id: string; endpoint: string; error: string; attempts: number; failed_at: string; resolved: boolean }> }>(
+    api.get<{ items: Array<{ id: string; endpoint: string; method?: string; error: string; attempts: number; failed_at: string; resolved: boolean }> }>(
       '/admin/failed-api-calls',
       { params: resolved !== undefined ? { resolved } : {} },
     ),
+  retryFailedApiCall: (callId: string) =>
+    api.post<{ status: string; message: string }>(`/admin/failed-api-calls/${callId}/retry`),
 };
 
 export const buyerRelationships = {
@@ -118,6 +120,55 @@ export const funding = {
     api.post<{ funding_suitability: number }>(`/opportunities/${opportunityId}/compute-funding`),
   computePreference: (opportunityId: string) =>
     api.post<{ buyer_preference_score: number }>(`/opportunities/${opportunityId}/compute-preference`),
+};
+
+export const contacts = {
+  listByCompany: (companyId: string) =>
+    api.get<Contact[]>(`/companies/${companyId}/contacts`),
+  createForCompany: (companyId: string, body: {
+    first_name: string; last_name: string; email: string;
+    job_title?: string; phone_direct?: string; phone_mobile?: string;
+    linkedin_url?: string; is_primary?: boolean; notes?: string;
+  }) => api.post<Contact>(`/companies/${companyId}/contacts`, body),
+  listByOrganization: (orgId: string) =>
+    api.get<Contact[]>(`/organizations/${orgId}/contacts`),
+  createForOrganization: (orgId: string, body: {
+    first_name: string; last_name: string; email: string;
+    job_title?: string; phone_direct?: string; phone_mobile?: string;
+    linkedin_url?: string; is_primary?: boolean; notes?: string;
+  }) => api.post<Contact>(`/organizations/${orgId}/contacts`, body),
+  listByOpportunity: (opportunityId: string) =>
+    api.get<Contact[]>(`/opportunities/${opportunityId}/contacts`),
+  update: (contactId: string, body: Partial<{
+    first_name: string; last_name: string; email: string;
+    job_title: string; phone_direct: string; phone_mobile: string;
+    linkedin_url: string; is_primary: boolean; notes: string;
+  }>) => api.patch<Contact>(`/contacts/${contactId}`, body),
+  delete: (contactId: string) => api.delete(`/contacts/${contactId}`),
+};
+
+export const awardsApi = {
+  list: (params: Record<string, unknown>) =>
+    api.get<{ items: AwardItem[]; total: number; page: number; page_size: number }>('/awards', { params }),
+};
+
+export const tendersApi = {
+  list: (params: Record<string, unknown>) =>
+    api.get<{ items: TenderItem[]; total: number; page: number; page_size: number }>('/tenders', { params }),
+  toggleWatch: (tenderId: string) =>
+    api.post<{ is_watching: boolean }>('/watchlist/toggle', { tender_id: tenderId }),
+  provinces: () =>
+    api.get<string[]>('/tenders/provinces'),
+};
+
+export const organizationsApi = {
+  list: () =>
+    api.get<{ id: string; name: string }[]>('/organizations'),
+};
+
+export const categoriesApi = {
+  list: () =>
+    api.get<{ id: string; name: string }[]>('/categories'),
 };
 
 export const crmActivity = {

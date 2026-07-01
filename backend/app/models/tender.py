@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Numeric, String, Text, UniqueConstraint, JSON
+from sqlalchemy import Column, DateTime, Index, Numeric, String, Text, UniqueConstraint, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -9,6 +9,16 @@ from app.database import Base
 
 class Tender(Base):
     __tablename__ = "tenders"
+
+    __table_args__ = (
+        Index("idx_tenders_title", "title"),
+        Index("idx_tenders_buyer_org_id", "buyer_org_id"),
+        Index("idx_tenders_province", "province"),
+        Index("idx_tenders_category_id", "category_id"),
+        Index("idx_tenders_estimated_value", "estimated_value"),
+        Index("idx_tenders_closing_date", "closing_date"),
+        Index("idx_tenders_tender_type", "tender_type"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     api_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)

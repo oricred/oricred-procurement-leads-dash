@@ -3,6 +3,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel
 
+from app.schemas.contact import ContactRead
+
 
 class OpportunityRead(BaseModel):
     id: str
@@ -23,6 +25,7 @@ class OpportunityRead(BaseModel):
     buyer_preference_score: Decimal | None = None
     days_since_award: int | None = None
     related_bidders: list[dict] | None = None
+    contacts: list[ContactRead] = []
     notes: str | None = None
     created_at: datetime
     updated_at: datetime

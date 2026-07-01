@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models.filter_config import FilterConfig
 from app.models.job_run import JobRun
 from app.models.failed_api_call import FailedApiCall
+from app.clients.base import TSAClient
 from app.models.user import User
 from app.api.auth import get_current_user
 from app.schemas.auth import UserRead
@@ -275,6 +276,7 @@ async def get_failed_api_calls(limit: int = 50, resolved: bool | None = None, db
             {
                 "id": str(r.id),
                 "endpoint": r.endpoint,
+                "method": r.method,
                 "error": r.error,
                 "attempts": r.attempts,
                 "failed_at": r.failed_at.isoformat(),
@@ -283,3 +285,29 @@ async def get_failed_api_calls(limit: int = 50, resolved: bool | None = None, db
             for r in rows
         ]
     }
+
+
+@router.post("/failed-api-calls/{call_id}/retry")
+async def retry_failed_api_call(call_id: str, db: AsyncSession = Depends(get_db), _=Depends(_require_admin)):
+    result = await db.execute(select(FailedApiCall).where(FailedApiCall.id == call_id))
+    call = result.scalar_one_or_none()
+    if not call:
+        raise HTTPException(status_code=404, detail="Failed API call not found")
+
+    client = TSAClient()
+    try:
+        method = call.method or "GET"
+        kwargs: dict = call.params.copy() if call.params else {}
+        await client.request(method, call.endpoint, **kwargs)
+        call.resolved = True
+        await db.commit()
+        return {"status": "ok", "message": "API call retried and succeeded"}
+    except Exception as e:
+        call.resolved = False
+        await db.commit()
+        raise HTTPException(
+            status_code=502,
+            detail=f"Retry failed: {str(e)[:200]}",
+        )
+    finally:
+        await client.close()

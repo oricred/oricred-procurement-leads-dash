@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Integer, Numeric, String, Text, JSON
+from sqlalchemy import Column, DateTime, Index, Integer, Numeric, String, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -9,6 +9,14 @@ from app.database import Base
 
 class Award(Base):
     __tablename__ = "awards"
+
+    __table_args__ = (
+        Index("idx_awards_supplier_name", "supplier_name"),
+        Index("idx_awards_buyer_org_id", "buyer_org_id"),
+        Index("idx_awards_amount", "amount"),
+        Index("idx_awards_source", "source"),
+        Index("idx_awards_bee_level", "bee_level"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     api_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)

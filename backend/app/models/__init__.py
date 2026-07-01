@@ -13,6 +13,7 @@ from app.models.job_run import JobRun
 from app.models.failed_api_call import FailedApiCall
 from app.models.user import User
 from app.models.buyer_relationship import BuyerRelationship
+from app.models.contact import Contact
 
 __all__ = [
     "Tender",
@@ -31,4 +32,5 @@ __all__ = [
     "FailedApiCall",
     "User",
     "BuyerRelationship",
+    "Contact",
 ]

@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { TrendingUp, Columns, Eye, LogOut, Activity, Shield, Clock } from 'lucide-react';
+import { TrendingUp, Columns, Eye, LogOut, Activity, Shield, Clock, Award, FileText } from 'lucide-react';
 import { auth, dashboard } from '../services/api';
 import { useState } from 'react';
 
@@ -52,7 +52,9 @@ export default function Layout() {
         <nav className="flex-1 p-3 space-y-1">
           {[
             { path: '/pipeline', label: 'Pipeline', icon: Columns },
-            { path: '/watching', label: 'Watching', icon: Eye },
+            { path: '/matching', label: 'Matching', icon: Eye },
+            { path: '/awards', label: 'Awards', icon: Award },
+            { path: '/tenders', label: 'Tenders', icon: FileText },
             { path: '/past-due', label: 'Past Due', icon: Clock },
             ...(isAdmin ? [{ path: '/admin', label: 'Admin', icon: Shield }] : []),
           ].map(({ path, label, icon: Icon }) => (

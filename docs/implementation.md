@@ -52,7 +52,7 @@ Tender Published (Tenders-SA: /tenders/new)
 Apply Qualification Filters (§5) ──reject──> discarded, not surfaced
         │ pass
         ▼
-Tracked ("Watching" pane, §7.3)
+Tracked ("Matching" pane, §7.3)
         │
         ▼
 Award-Timing Model (§2) sets expected window
@@ -129,7 +129,7 @@ Card expansion: award detail, company intelligence panel, org contact panel, com
 - Rolling 7-day **pre-filter** award feed — raw signal, so filter tuning can be sanity-checked against what it's excluding.
 - Past-Due Queue counter (§2/§6 trigger).
 
-### 7.3 Watching Board (pre-award)
+### 7.3 Matching (pre-award)
 Tracked tenders between publication and award, with expected-award countdown from §2's model.
 
 ---
@@ -140,7 +140,7 @@ Tracked tenders between publication and award, with expected-award countdown fro
 - Tenders-SA API integration: tenders, awards, organizations, companies, forensic endpoints
 - Award-Timing Model (§2): baseline computation + weekly refresh job
 - Qualification filter engine (§5), config-driven
-- Kanban dashboard (§7): pipeline + radar + watching board
+- Kanban dashboard (§7): pipeline + radar + matching + awards/tenders browsers
 - Contact-sufficiency classifier (§1.1)
 - Known-supplier short-circuit for bidder resolution (§4)
 - Email alerting

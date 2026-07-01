@@ -45,7 +45,7 @@ class TSAClient:
                     logger.warning("api_retry", attempt=attempt + 1, delay=delay, path=path)
                     await asyncio.sleep(delay)
                 else:
-                    await self._record_failure(path, kwargs, str(e), self.MAX_RETRIES + 1)
+                    await self._record_failure(method, path, kwargs, str(e), self.MAX_RETRIES + 1)
                     raise
             except (httpx.TimeoutException, httpx.NetworkError) as e:
                 last_exception = e
@@ -54,18 +54,19 @@ class TSAClient:
                     logger.warning("api_retry_network", attempt=attempt + 1, delay=delay, path=path)
                     await asyncio.sleep(delay)
                 else:
-                    await self._record_failure(path, kwargs, str(e), self.MAX_RETRIES + 1)
+                    await self._record_failure(method, path, kwargs, str(e), self.MAX_RETRIES + 1)
         if last_exception:
-            await self._record_failure(path, kwargs, str(last_exception), self.MAX_RETRIES + 1)
+            await self._record_failure(method, path, kwargs, str(last_exception), self.MAX_RETRIES + 1)
         raise last_exception  # type: ignore
 
-    async def _record_failure(self, path: str, params: dict, error: str, attempts: int):
+    async def _record_failure(self, method: str, path: str, params: dict, error: str, attempts: int):
         try:
             from app.database import async_session
             from app.models.failed_api_call import FailedApiCall
             async with async_session() as dl_db:
                 dl_db.add(FailedApiCall(
                     endpoint=path,
+                    method=method,
                     params=params,
                     error=error[:500],
                     attempts=attempts,

@@ -1,13 +1,10 @@
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.clients.companies import CompaniesClient
-from app.clients.forensic import ForensicClient
-from app.clients.tenders import TendersClient
+from app.clients.tsa_db import TSADatabase
 from app.models.company import Company
 
 logger = structlog.get_logger()
@@ -23,32 +20,45 @@ class Competitor:
 
 
 class CompetitorIntelService:
-    def __init__(self, db: AsyncSession, tenders: TendersClient, companies: CompaniesClient, forensic: ForensicClient):
+    def __init__(self, db: AsyncSession, tsa_db: TSADatabase | None = None):
         self.db = db
-        self.tenders = tenders
-        self.companies = companies
-        self.forensic = forensic
+        self.tsa_db = tsa_db or TSADatabase()
 
     async def get_speculative_competitors(self, organization_id: str | None, category_id: str | None) -> list[Competitor]:
         if not organization_id or not category_id:
             return []
         try:
-            data = await self.companies.get_top_companies(organization_id, category_id, limit=10)
-            return [
-                Competitor(
-                    name=item.get("name", "Unknown"),
-                    inferred=True,
-                    reason=f"Top bidder for this category from this org",
-                )
-                for item in data
-            ]
+            # Query TSA DB for top suppliers awarded by this org in this category
+            awards = await self.tsa_db.query_awards(
+                filters={"buyer_org_id": organization_id},
+                fields=["supplier_name"],
+            )
+            seen: set[str] = set()
+            competitors = []
+            for aw in awards:
+                name = aw.get("supplier_name")
+                if name and name not in seen:
+                    seen.add(name)
+                    company = await self._resolve_company(name)
+                    competitors.append(
+                        Competitor(
+                            name=name,
+                            inferred=True,
+                            company_id=str(company.id) if company else None,
+                            resolved=company is not None,
+                            reason="Awarded supplier for this buyer org",
+                        )
+                    )
+                    if len(competitors) >= 10:
+                        break
+            return competitors
         except Exception as e:
             logger.warning("speculative_competitors_failed", error=str(e))
             return []
 
     async def get_confirmed_competitors(self, tender_api_id: str) -> list[Competitor]:
         try:
-            bidders = await self.tenders.get_bidders(tender_api_id)
+            bidders = await self.tsa_db.query_bidders(tender_ids=[tender_api_id])
         except Exception as e:
             logger.warning("bidders_fetch_failed", error=str(e))
             return []
@@ -73,14 +83,23 @@ class CompetitorIntelService:
         if company:
             return company
 
+        # Try lookup by name in TSA DB companies table
         try:
-            match = await self.forensic.match_company(name)
-            if match and match.get("confidence", 0) >= 0.8:
-                company_id = match.get("company_id")
-                if company_id:
-                    result = await self.db.execute(select(Company).where(Company.api_id == company_id))
-                    return result.scalar_one_or_none()
+            companies = await self.tsa_db.query_companies(
+                filters={"names": [name]},
+                fields=["id", "name"],
+            )
+            if companies:
+                co_data = companies[0]
+                company = Company(
+                    api_id=co_data.get("id", name),
+                    name=co_data.get("name", name),
+                    raw_payload=co_data,
+                )
+                await self.db.merge(company)
+                await self.db.flush()
+                return company
         except Exception as e:
-            logger.warning("company_match_failed", name=name, error=str(e))
+            logger.warning("company_lookup_failed", name=name, error=str(e))
 
         return None

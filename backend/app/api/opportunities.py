@@ -11,7 +11,9 @@ from app.models.award import Award
 from app.models.tender import Tender
 from app.models.company import Company
 from app.models.organization import Organization
+from app.models.contact import Contact
 from app.schemas.opportunity import OpportunityRead, OpportunityStageUpdate, OpportunityUpdate, OpportunityList, AuditEntry
+from app.schemas.contact import ContactRead
 from app.schemas.buyer_relationship import BuyerRelationshipRead
 from app.services.buyer_relationship import compute_relationship, get_relationship
 from app.services.funding_suitability import compute_funding_suitability
@@ -21,7 +23,28 @@ from app.services.crm.sync import push_opportunity_to_crm
 router = APIRouter()
 
 
-def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: Award | None = None, company: Company | None = None) -> OpportunityRead:
+async def _load_opportunity_contacts(opp: Opportunity, db: AsyncSession) -> list[ContactRead]:
+    contacts: list[Contact] = []
+    if opp.company_id:
+        c_result = await db.execute(
+            select(Contact).where(Contact.company_id == opp.company_id).order_by(Contact.is_primary.desc(), Contact.last_name)
+        )
+        contacts.extend(c_result.scalars().all())
+    if opp.tender_id:
+        t_result = await db.execute(select(Tender).where(Tender.id == opp.tender_id))
+        tender = t_result.scalar_one_or_none()
+        if tender and tender.buyer_org_id:
+            o_result = await db.execute(
+                select(Contact).where(Contact.organization_id == tender.buyer_org_id).order_by(Contact.is_primary.desc(), Contact.last_name)
+            )
+            seen = {c.id for c in contacts}
+            for c in o_result.scalars().all():
+                if c.id not in seen:
+                    contacts.append(c)
+    return [ContactRead.model_validate(c) for c in contacts]
+
+
+def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: Award | None = None, company: Company | None = None, contacts: list[ContactRead] | None = None) -> OpportunityRead:
     days_since = None
     if award and award.award_date:
         days_since = (datetime.now(timezone.utc) - award.award_date).days
@@ -44,6 +67,7 @@ def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: 
         funding_suitability=opp.funding_suitability,
         buyer_preference_score=opp.buyer_preference_score,
         related_bidders=opp.related_bidders,
+        contacts=contacts or [],
         days_since_award=days_since,
         notes=opp.notes,
         created_at=opp.created_at,
@@ -84,7 +108,8 @@ async def list_opportunities(
             c_result = await db.execute(select(Company).where(Company.id == opp.company_id))
             company = c_result.scalar_one_or_none()
 
-        items.append(_opportunity_to_read(opp, tender, award, company))
+        contacts = await _load_opportunity_contacts(opp, db)
+        items.append(_opportunity_to_read(opp, tender, award, company, contacts))
 
     return OpportunityList(items=items, total=len(items))
 
@@ -109,7 +134,8 @@ async def get_opportunity(opportunity_id: str, db: AsyncSession = Depends(get_db
         c_result = await db.execute(select(Company).where(Company.id == opp.company_id))
         company = c_result.scalar_one_or_none()
 
-    return _opportunity_to_read(opp, tender, award, company)
+    contacts = await _load_opportunity_contacts(opp, db)
+    return _opportunity_to_read(opp, tender, award, company, contacts)
 
 
 @router.patch("/{opportunity_id}/stage", response_model=OpportunityRead)

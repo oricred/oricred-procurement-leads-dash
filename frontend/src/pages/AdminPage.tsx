@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Key, SlidersHorizontal, Bell, Database, Users, Clock, AlertTriangle, Play, Trash2, Plus, Filter,
+  Key, SlidersHorizontal, Bell, Database, Users, Clock, AlertTriangle, Play, Trash2, Plus, Filter, RefreshCw,
 } from 'lucide-react';
 import { admin } from '../services/api';
 import type { User } from '../types';
@@ -14,6 +14,7 @@ const TABS = [
   { id: 'scoring', label: 'Scoring', icon: SlidersHorizontal },
   { id: 'jobs', label: 'Jobs', icon: Clock },
   { id: 'users', label: 'Users', icon: Users },
+  { id: 'failed-api-calls', label: 'Dead Letter', icon: AlertTriangle },
 ];
 
 export default function AdminPage() {
@@ -45,6 +46,7 @@ export default function AdminPage() {
         {activeTab === 'scoring' && <ScoringTab />}
         {activeTab === 'jobs' && <JobsTab />}
         {activeTab === 'users' && <UsersTab />}
+        {activeTab === 'failed-api-calls' && <FailedApiCallsTab />}
       </div>
     </div>
   );
@@ -982,6 +984,83 @@ function InlineEditUser({ user, onSave, onCancel }: {
       </select>
       <button onClick={() => onSave(form)} className="text-xs text-emerald-400">Save</button>
       <button onClick={onCancel} className="text-xs text-gray-400">Cancel</button>
+    </div>
+  );
+}
+
+function FailedApiCallsTab() {
+  const queryClient = useQueryClient();
+  const [showResolved, setShowResolved] = useState(false);
+  const { data, isLoading } = useQuery({
+    queryKey: ['admin-failed-api-calls', showResolved],
+    queryFn: () => admin.getFailedApiCalls(showResolved ? undefined : false).then(r => r.data),
+    refetchInterval: 15000,
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: (callId: string) => admin.retryFailedApiCall(callId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-failed-api-calls'] }),
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-white">Failed API Calls</h2>
+        <label className="flex items-center gap-1.5 text-xs text-gray-400">
+          <input type="checkbox" checked={showResolved} onChange={e => setShowResolved(e.target.checked)} className="rounded" />
+          Show resolved
+        </label>
+      </div>
+      {isLoading ? <p className="text-gray-400">Loading...</p> : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-gray-400 border-b border-surface-300">
+                <th className="pb-2 pr-3">Endpoint</th>
+                <th className="pb-2 pr-3">Method</th>
+                <th className="pb-2 pr-3">Error</th>
+                <th className="pb-2 pr-3">Attempts</th>
+                <th className="pb-2 pr-3">Failed At</th>
+                <th className="pb-2 pr-3">Status</th>
+                <th className="pb-2">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data?.items?.map((item: { id: string; endpoint: string; method?: string; error: string; attempts: number; failed_at: string; resolved: boolean }) => (
+                <tr key={item.id} className="border-b border-surface-300 text-gray-300">
+                  <td className="py-2 pr-3 text-xs max-w-[200px] truncate font-mono">{item.endpoint}</td>
+                  <td className="py-2 pr-3 text-xs">{item.method || 'GET'}</td>
+                  <td className="py-2 pr-3 text-xs text-red-400 max-w-[250px] truncate">{item.error}</td>
+                  <td className="py-2 pr-3">{item.attempts}</td>
+                  <td className="py-2 pr-3 text-xs">{new Date(item.failed_at).toLocaleString()}</td>
+                  <td className="py-2 pr-3">
+                    <span className={`text-xs px-1.5 py-0.5 rounded ${item.resolved ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
+                      {item.resolved ? 'Resolved' : 'Failed'}
+                    </span>
+                  </td>
+                  <td className="py-2">
+                    {!item.resolved && (
+                      <button
+                        onClick={() => retryMutation.mutate(item.id)}
+                        disabled={retryMutation.isPending}
+                        className="flex items-center gap-1 text-xs text-primary-400 hover:text-primary-300"
+                      >
+                        <RefreshCw className="w-3 h-3" /> Retry
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {(!data?.items || data.items.length === 0) && (
+                <tr><td colSpan={7} className="py-4 text-center text-gray-500">No failed API calls</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {retryMutation.isError && (
+        <p className="text-red-400 text-sm">Retry failed: {(retryMutation.error as Error).message}</p>
+      )}
     </div>
   );
 }

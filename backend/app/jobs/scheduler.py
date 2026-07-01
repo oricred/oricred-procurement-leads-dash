@@ -9,6 +9,7 @@ from app.jobs.discovery import discover_new_tenders
 from app.jobs.award_check import check_awards_for_watching
 from app.jobs.model_refresh import refresh_timing_model
 from app.jobs.crm_sync import sync_crm
+from app.jobs.contact_enrichment import run_contact_enrichment
 from app.models.job_run import JobRun
 
 logger = structlog.get_logger()
@@ -65,6 +66,12 @@ def start_scheduler():
         id="sync_crm", name="Sync CRM activity",
     )
 
+    scheduler.add_job(
+        run_job, "cron", day_of_week="mon,thu", hour="3", minute="0",
+        args=["contact_enrichment", run_contact_enrichment],
+        id="contact_enrichment", name="Enrich contacts from TSA DB",
+    )
+
     scheduler.start()
-    logger.info("scheduler_started", jobs=["discover_tenders", "check_awards", "refresh_timing_model", "sync_crm"])
+    logger.info("scheduler_started", jobs=["discover_tenders", "check_awards", "refresh_timing_model", "sync_crm", "contact_enrichment"])
     return scheduler

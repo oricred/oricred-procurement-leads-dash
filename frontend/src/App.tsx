@@ -3,7 +3,9 @@ import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import Layout from './components/Layout';
 import PipelinePage from './pages/PipelinePage';
-import WatchingPage from './pages/WatchingPage';
+import MatchingPage from './pages/MatchingPage';
+import AwardsPage from './pages/AwardsPage';
+import TendersPage from './pages/TendersPage';
 import AdminPage from './pages/AdminPage';
 import PastDuePage from './pages/PastDuePage';
 import LoginPage from './pages/LoginPage';
@@ -49,7 +51,9 @@ export default function App() {
       >
         <Route index element={<Navigate to="/pipeline" replace />} />
         <Route path="pipeline" element={<PipelinePage />} />
-        <Route path="watching" element={<WatchingPage />} />
+        <Route path="matching" element={<MatchingPage />} />
+        <Route path="awards" element={<AwardsPage />} />
+        <Route path="tenders" element={<TendersPage />} />
         <Route path="past-due" element={<PastDuePage />} />
         <Route path="admin" element={<AdminPage />} />
       </Route>

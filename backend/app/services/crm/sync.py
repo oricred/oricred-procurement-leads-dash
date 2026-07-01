@@ -9,6 +9,7 @@ from app.models.opportunity import Opportunity
 from app.models.tender import Tender
 from app.models.award import Award
 from app.models.company import Company
+from app.models.contact import Contact
 from app.services.crm import CRMAdapter
 from app.services.crm.monday import MondayDotComAdapter
 from app.services.admin_config import get_config
@@ -77,6 +78,22 @@ async def push_opportunity_to_crm(opportunity_id: str) -> None:
             column_values["status_1"] = opp.contact_sufficiency
         if opp.risk_flag:
             column_values["status_2"] = opp.risk_flag
+
+        # Push primary contact info
+        if opp.company_id:
+            c_result = await db.execute(
+                select(Contact).where(Contact.company_id == opp.company_id, Contact.is_primary == True).limit(1)
+            )
+            primary = c_result.scalar_one_or_none()
+            if primary:
+                contact_parts = [f"{primary.first_name} {primary.last_name}"]
+                if primary.email:
+                    contact_parts.append(primary.email)
+                if primary.phone_direct:
+                    contact_parts.append(primary.phone_direct)
+                if primary.phone_mobile:
+                    contact_parts.append(primary.phone_mobile)
+                column_values["text7"] = " | ".join(contact_parts)
 
         if opp.crm_item_id:
             for col_id, value in column_values.items():

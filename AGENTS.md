@@ -17,11 +17,11 @@ oricred/
 │   │   ├── database.py          # SQLAlchemy async engine + session
 │   │   ├── seed.py              # Dev seed data
 │   │   ├── api/                 # Route handlers (auth, opportunities, watchlist, radar, dashboard, admin)
-│   │   ├── clients/             # Tenders-SA API client wrappers (base, tenders, awards, companies, organizations, reference, forensic)
-│   │   ├── jobs/                # APScheduler jobs (discovery, award_check, model_refresh, scheduler, crm_sync)
-│   │   ├── models/              # SQLAlchemy ORM models (15 tables)
-│   │   ├── schemas/             # Pydantic request/response schemas
-│   │   └── services/            # Business logic (qualification, award_timing, contact_sufficiency, competitor_intel, email_alert, auth, funding_suitability, buyer_relationship, crm/, municipal_scraper)
+│   │   ├── clients/             # Tenders-SA: TSADatabase (direct SQL) + TSAClient (REST, admin retry only)
+│   │   ├── jobs/                # APScheduler jobs (discovery, award_check, model_refresh, scheduler, crm_sync, contact_enrichment)
+│   │   ├── models/              # SQLAlchemy ORM models (16 tables + contact, failed_api_call)
+│   │   ├── schemas/             # Pydantic request/response schemas (+ contact)
+│   │   └── services/            # Business logic (qualification, award_timing, contact_sufficiency, competitor_intel, email_alert, auth, funding_suitability, buyer_relationship, crm/, municipal_scraper, contact_enrichment)
 │   ├── alembic/                 # Migrations (empty — uses create_all)
 │   └── pyproject.toml
 ├── frontend/
@@ -74,11 +74,15 @@ oricred/
 - [x] Dead-letter queue: `FailedApiCall` writes in TSAClient on retry exhaustion
 - [x] `GET /admin/failed-api-calls` endpoint for dead-letter management
 - [x] Inline notes editing in opportunity modal (edit/save/cancel)
-
-### Remaining
-- [ ] Real municipal scraper implementations (at least City of Joburg + Cape Town)
-- [ ] Tests for new services
-- [ ] Dead-letter retry button (re-queue failed API calls)
+- [x] Contact tracking model, API, and frontend panel in opportunity modal
+- [x] TSADatabase — direct PostgreSQL interface to Tenders-SA (read-only, filter-driven)
+- [x] Discovery job rewritten to use TSADatabase SQL filters (vs REST API)
+- [x] Award check job rewritten for batch SQL (eliminated N+1)
+- [x] CompetitorIntelService refactored to use TSADatabase
+- [x] Contact enrichment service — pulls directors/key_personnel from TSA DB on schedule
+- [x] Tests for contacts, TSADatabase query builders, and competitor intel (53 tests)
+- [x] Dead-letter retry button in admin UI (re-queues failed API calls via TSAClient)
+- [x] Cleaned up 7 unused REST API client files (now only TSAClient + TSADatabase)
 
 ## Deployment
 - **Service**: systemd `oricred-backend.service`, uvicorn on `127.0.0.1:8000`

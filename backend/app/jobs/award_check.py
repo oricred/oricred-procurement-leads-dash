@@ -1,9 +1,10 @@
+from collections import defaultdict
 from datetime import datetime, timezone
 
 import structlog
-from sqlalchemy import select, and_
+from sqlalchemy import select
 
-from app.clients import TSAClient, AwardsClient, CompaniesClient, OrganizationsClient, ForensicClient
+from app.clients import TSADatabase
 from app.database import async_session
 from app.models.watchlist import WatchlistItem
 from app.models.tender import Tender
@@ -13,20 +14,30 @@ from app.models.organization import Organization
 from app.models.opportunity import Opportunity
 from app.models.past_due import PastDueQueue
 from app.services.contact_sufficiency import ContactSufficiencyService
-from app.services.competitor_intel import CompetitorIntelService
 from app.services.email_alert import EmailAlertService
 from app.services.buyer_preference import compute_buyer_preference
 from app.services.crm.sync import push_opportunity_to_crm
 
 logger = structlog.get_logger()
 
+AWARD_FIELDS = [
+    "id", "tender_id", "supplier_name", "amount", "award_date",
+    "bee_level", "bee_points",
+]
+
+COMPANY_FIELDS = [
+    "id", "name", "registration_number", "bbbee_level",
+    "contact_email", "contact_phone", "website",
+]
+
+ORGANIZATION_FIELDS = [
+    "id", "name", "organization_type", "contact_email", "contact_phone",
+    "website", "confidence_score", "contact_email_is_role_based",
+]
+
 
 async def check_awards_for_watching():
-    tsa = TSAClient()
-    awards_client = AwardsClient(tsa)
-    companies_client = CompaniesClient(tsa)
-    orgs_client = OrganizationsClient(tsa)
-    forensic_client = ForensicClient(tsa)
+    tsa_db = TSADatabase()
     email = EmailAlertService()
     logger.info("job_started", job="check_awards")
 
@@ -34,7 +45,7 @@ async def check_awards_for_watching():
         async with async_session() as db:
             now = datetime.now(timezone.utc)
 
-            # Watching tenders inside or past their window
+            # Load all watching watchlist items with their tenders
             result = await db.execute(
                 select(WatchlistItem, Tender)
                 .join(Tender, WatchlistItem.tender_id == Tender.id)
@@ -42,49 +53,98 @@ async def check_awards_for_watching():
             )
             rows = result.all()
 
-            for wl, tender in rows:
-                try:
-                    raw_awards = await awards_client.get_awards_by_tender(tender.api_id)
-                except Exception as e:
-                    logger.warning("award_check_failed", tender_id=tender.api_id, error=str(e))
-                    continue
+            if not rows:
+                logger.info("award_check_no_watching")
+                return
 
-                if raw_awards:
-                    # Award found
-                    for raw in raw_awards:
+            # Build lookup: TSA tender_id → (wl, our_tender)
+            wl_by_api_id = {tender.api_id: (wl, tender) for wl, tender in rows}
+            tender_api_ids = list(wl_by_api_id.keys())
+
+            # ── Batch query awards from TSA DB ──
+            try:
+                raw_awards = await tsa_db.query_awards(
+                    filters={"tender_ids": tender_api_ids},
+                    fields=AWARD_FIELDS,
+                )
+            except Exception as e:
+                logger.error("batch_award_query_failed", error=str(e))
+                raw_awards = []
+
+            # Group awards by TSA tender_id
+            awards_by_tender: dict[str, list[dict]] = defaultdict(list)
+            for aw in raw_awards:
+                tid = aw.get("tender_id")
+                if tid:
+                    awards_by_tender[tid].append(aw)
+
+            # ── Batch query companies for all unique suppliers ──
+            all_suppliers = list({aw.get("supplier_name") for aw in raw_awards if aw.get("supplier_name")})
+            company_by_name: dict[str, dict] = {}
+
+            if all_suppliers:
+                try:
+                    raw_companies = await tsa_db.query_companies(
+                        filters={"names": all_suppliers},
+                        fields=COMPANY_FIELDS,
+                    )
+                    for co in raw_companies:
+                        company_by_name[co.get("name", "")] = co
+                except Exception as e:
+                    logger.warning("batch_company_query_failed", error=str(e))
+
+            # ── Batch query bidders for competitor intel ──
+            bidders_by_tender: dict[str, list[str]] = defaultdict(list)
+            try:
+                raw_bidders = await tsa_db.query_bidders(tender_ids=tender_api_ids)
+                for b in raw_bidders:
+                    tid = b.get("tender_id")
+                    name = b.get("name")
+                    if tid and name:
+                        bidders_by_tender[tid].append(name)
+            except Exception as e:
+                logger.warning("batch_bidder_query_failed", error=str(e))
+
+            # Process each watching tender
+            for wl, tender in rows:
+                matched_awards = awards_by_tender.get(tender.api_id, [])
+
+                if matched_awards:
+                    for raw in matched_awards:
                         supplier = raw.get("supplier_name", "Unknown")
 
-                        # Upsert company
+                        # Upsert company (from batch data)
                         company = None
-                        try:
-                            co_data = await companies_client.get_company(supplier)
-                            if co_data:
-                                company = Company(
-                                    api_id=co_data.get("id", supplier),
-                                    name=supplier,
-                                    bee_level=co_data.get("bee_level"),
-                                    cipc_forensic_risk_score=co_data.get("cipc_forensic_risk_score"),
-                                    restricted_supplier=co_data.get("restricted_supplier", False),
-                                    raw_payload=co_data,
-                                    last_refreshed_at=now,
-                                )
-                                db.merge(company)
-                                await db.flush()
-                        except Exception:
-                            pass
+                        co_data = company_by_name.get(supplier)
+                        if co_data:
+                            company = Company(
+                                api_id=co_data.get("id", supplier),
+                                name=supplier,
+                                bee_level=co_data.get("bbbee_level"),
+                                registration_number=co_data.get("registration_number"),
+                                raw_payload=co_data,
+                                last_refreshed_at=now,
+                            )
+                            db.merge(company)
+                            await db.flush()
 
-                        # Upsert organization
+                        # Upsert buyer organization
                         org = None
                         if tender.buyer_org_id:
                             try:
-                                org_data = await orgs_client.get_organization(tender.buyer_org_id)
-                                if org_data:
+                                org_results = await tsa_db.query_organizations(
+                                    filters={"ids": [tender.buyer_org_id]},
+                                    fields=ORGANIZATION_FIELDS,
+                                )
+                                if org_results:
+                                    org_data = org_results[0]
                                     org = Organization(
                                         id=tender.buyer_org_id,
                                         name=org_data.get("name", tender.buyer_org_id),
                                         organization_type=org_data.get("organization_type"),
                                         contact_email=org_data.get("contact_email"),
                                         contact_phone=org_data.get("contact_phone"),
+                                        contact_website=org_data.get("website"),
                                         contact_email_is_role_based=org_data.get("contact_email_is_role_based"),
                                         confidence_score=org_data.get("confidence_score"),
                                         raw_payload=org_data,
@@ -130,25 +190,17 @@ async def check_awards_for_watching():
 
                         opp.buyer_preference_score = await compute_buyer_preference(str(opp.id), db)
 
-                        try:
-                            ci = CompetitorIntelService(db, tenders_client, companies_client, forensic_client)
-                            related = []
-                            try:
-                                if tender.closing_date and now > tender.closing_date:
-                                    related = [
-                                        {"name": c.name, "inferred": c.inferred, "company_id": c.company_id, "resolved": c.resolved, "reason": c.reason}
-                                        for c in await ci.get_confirmed_competitors(tender.api_id)
-                                    ]
-                                else:
-                                    related = [
-                                        {"name": c.name, "inferred": c.inferred, "company_id": c.company_id, "resolved": c.resolved, "reason": c.reason}
-                                        for c in await ci.get_speculative_competitors(tender.buyer_org_id, tender.category_id)
-                                    ]
-                            except Exception as e:
-                                logger.warning("related_bidders_fetch_failed", error=str(e))
-                            opp.related_bidders = related or None
-                        except Exception as e:
-                            logger.warning("competitor_intel_failed", error=str(e))
+                        # Build related bidders from TSA DB bidders
+                        related = []
+                        bidders = bidders_by_tender.get(tender.api_id, [])
+                        for bidder_name in bidders:
+                            if bidder_name.lower() != supplier.lower():
+                                related.append({
+                                    "name": bidder_name,
+                                    "inferred": False,
+                                    "reason": "confirmed bidder",
+                                })
+                        opp.related_bidders = related if related else None
 
                         await email.send(
                             "award_detected",
@@ -192,7 +244,7 @@ async def check_awards_for_watching():
                             )
 
             await db.commit()
-            logger.info("award_check_complete", checked=len(rows))
+            logger.info("award_check_complete", checked=len(rows), awards_found=len(raw_awards))
 
     finally:
-        await tsa.close()
+        await tsa_db.close()

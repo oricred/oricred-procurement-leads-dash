@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, Building2, Award, Users, FileText, TrendingUp, BarChart3, Activity, History, Edit2 } from 'lucide-react';
-import { opportunities, buyerRelationships, crmActivity } from '../services/api';
-import type { Opportunity } from '../types';
+import { X, Building2, Award, Users, FileText, TrendingUp, BarChart3, Activity, History, Edit2, Phone, Mail, Linkedin, Star, Plus, Trash2 } from 'lucide-react';
+import { opportunities, buyerRelationships, crmActivity, contacts as contactsApi } from '../services/api';
+import type { Opportunity, Contact } from '../types';
 
 interface Props {
   opportunity: Opportunity;
@@ -47,6 +47,41 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
   const queryClient = useQueryClient();
   const [editingNotes, setEditingNotes] = useState(false);
   const [notesDraft, setNotesDraft] = useState(opp.notes ?? '');
+  const [showAddContact, setShowAddContact] = useState(false);
+  const [newContact, setNewContact] = useState({
+    first_name: '', last_name: '', email: '', phone_direct: '', phone_mobile: '',
+    job_title: '', linkedin_url: '', is_primary: false, notes: '',
+  });
+
+  const addContactMutation = useMutation({
+    mutationFn: async (body: typeof newContact) => {
+      if (opp.company_id) {
+        await contactsApi.createForCompany(opp.company_id, body);
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['opportunity', opp.id] });
+      setShowAddContact(false);
+      setNewContact({ first_name: '', last_name: '', email: '', phone_direct: '', phone_mobile: '', job_title: '', linkedin_url: '', is_primary: false, notes: '' });
+    },
+  });
+
+  const deleteContactMutation = useMutation({
+    mutationFn: (contactId: string) => contactsApi.delete(contactId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['opportunity', opp.id] });
+    },
+  });
+
+  function handleAddContact() {
+    addContactMutation.mutate(newContact);
+  }
+
+  function handleDeleteContact(contactId: string) {
+    if (confirm('Remove this contact?')) {
+      deleteContactMutation.mutate(contactId);
+    }
+  }
 
   const { data: auditData } = useQuery({
     queryKey: ['opportunity-audit', opp.id],
@@ -151,6 +186,9 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
             <div className="flex items-center gap-2 mb-3">
               <Users className="w-4 h-4 text-primary-400" />
               <h3 className="text-sm font-semibold text-gray-200">Contact</h3>
+              {opp.contacts.length > 0 && (
+                <span className="text-xs text-gray-500 ml-auto">{opp.contacts.length} contact{opp.contacts.length > 1 ? 's' : ''}</span>
+              )}
             </div>
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
@@ -163,6 +201,31 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
                 <span className="text-gray-500">Assigned</span>
                 <span className="text-gray-200">{opp.assigned_to ?? 'Unassigned'}</span>
               </div>
+              {(() => {
+                const primary = opp.contacts.find(c => c.is_primary);
+                if (!primary) return null;
+                return (
+                  <>
+                    <div className="border-t border-surface-300 my-2" />
+                    <div className="text-xs space-y-1">
+                      <div className="flex items-center gap-1 text-emerald-400 font-medium">
+                        <Star className="w-3 h-3" /> {primary.first_name} {primary.last_name}
+                        {primary.job_title && <span className="text-gray-500 font-normal">— {primary.job_title}</span>}
+                      </div>
+                      {primary.email && (
+                        <div className="flex items-center gap-1.5 text-gray-400">
+                          <Mail className="w-3 h-3" /> {primary.email}
+                        </div>
+                      )}
+                      {(primary.phone_direct || primary.phone_mobile) && (
+                        <div className="flex items-center gap-1.5 text-gray-400">
+                          <Phone className="w-3 h-3" /> {primary.phone_direct || primary.phone_mobile}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           </div>
 
@@ -334,6 +397,108 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
             )}
           </div>
         )}
+
+        {/* Contacts */}
+        <div className="glass rounded-xl p-4 mt-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 text-primary-400" />
+              <h3 className="text-sm font-semibold text-gray-200">Contacts</h3>
+            </div>
+            <button
+              onClick={() => setShowAddContact(true)}
+              className="p-1 hover:bg-surface-300 rounded transition-colors text-gray-400 hover:text-gray-200"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {showAddContact && (
+            <div className="mb-3 p-3 bg-surface-300 rounded-lg space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <input className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500" placeholder="First name" value={newContact.first_name} onChange={e => setNewContact(prev => ({ ...prev, first_name: e.target.value }))} />
+                <input className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500" placeholder="Last name" value={newContact.last_name} onChange={e => setNewContact(prev => ({ ...prev, last_name: e.target.value }))} />
+              </div>
+              <input className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500" placeholder="Email" type="email" value={newContact.email} onChange={e => setNewContact(prev => ({ ...prev, email: e.target.value }))} />
+              <div className="grid grid-cols-2 gap-2">
+                <input className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500" placeholder="Phone (direct)" value={newContact.phone_direct} onChange={e => setNewContact(prev => ({ ...prev, phone_direct: e.target.value }))} />
+                <input className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500" placeholder="Phone (mobile)" value={newContact.phone_mobile} onChange={e => setNewContact(prev => ({ ...prev, phone_mobile: e.target.value }))} />
+              </div>
+              <input className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500" placeholder="Job title" value={newContact.job_title} onChange={e => setNewContact(prev => ({ ...prev, job_title: e.target.value }))} />
+              <input className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500" placeholder="LinkedIn URL" value={newContact.linkedin_url} onChange={e => setNewContact(prev => ({ ...prev, linkedin_url: e.target.value }))} />
+              <div className="flex items-center gap-2">
+                <input type="checkbox" id="new-primary" checked={newContact.is_primary} onChange={e => setNewContact(prev => ({ ...prev, is_primary: e.target.checked }))} />
+                <label htmlFor="new-primary" className="text-xs text-gray-400">Primary contact</label>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleAddContact}
+                  disabled={!newContact.first_name || !newContact.last_name || !newContact.email}
+                  className="px-3 py-1 text-xs bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition-colors disabled:opacity-50"
+                >
+                  Add
+                </button>
+                <button
+                  onClick={() => setShowAddContact(false)}
+                  className="px-3 py-1 text-xs bg-surface-300 hover:bg-surface-200 text-gray-300 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {opp.contacts.length === 0 ? (
+            <p className="text-sm text-gray-500 italic">No contacts</p>
+          ) : (
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              {opp.contacts.map((c) => (
+                <div key={c.id} className="border-b border-surface-300 pb-2 last:border-0">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-medium text-gray-200">
+                          {c.first_name} {c.last_name}
+                        </span>
+                        {c.is_primary && <Star className="w-3 h-3 text-emerald-400 fill-emerald-400" />}
+                        {c.job_title && <span className="text-xs text-gray-500">— {c.job_title}</span>}
+                      </div>
+                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5 text-xs text-gray-400">
+                        {c.email && (
+                          <a href={`mailto:${c.email}`} className="flex items-center gap-1 hover:text-primary-400 transition-colors">
+                            <Mail className="w-3 h-3" /> {c.email}
+                          </a>
+                        )}
+                        {c.phone_direct && (
+                          <a href={`tel:${c.phone_direct}`} className="flex items-center gap-1 hover:text-primary-400 transition-colors">
+                            <Phone className="w-3 h-3" /> {c.phone_direct}
+                          </a>
+                        )}
+                        {c.phone_mobile && (
+                          <a href={`tel:${c.phone_mobile}`} className="flex items-center gap-1 hover:text-primary-400 transition-colors">
+                            <Phone className="w-3 h-3" /> {c.phone_mobile}
+                          </a>
+                        )}
+                        {c.linkedin_url && (
+                          <a href={c.linkedin_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 hover:text-primary-400 transition-colors">
+                            <Linkedin className="w-3 h-3" /> LinkedIn
+                          </a>
+                        )}
+                      </div>
+                      {c.notes && <p className="text-xs text-gray-600 mt-0.5">{c.notes}</p>}
+                    </div>
+                    <button
+                      onClick={() => handleDeleteContact(c.id)}
+                      className="p-1 hover:bg-surface-300 rounded transition-colors text-gray-600 hover:text-red-400 shrink-0 ml-2"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Notes */}
         <div className="glass rounded-xl p-4 mt-4">
