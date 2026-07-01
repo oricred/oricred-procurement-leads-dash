@@ -363,9 +363,27 @@ async def _seed_admin_configs(db: AsyncSession):
         FilterConfig(
             key="admin_scoring",
             value={
-                "province_weights": {"gp": 1.0, "wc": 0.9, "kzn": 0.8, "ec": 0.7, "lp": 0.6, "mp": 0.6, "nw": 0.6, "fs": 0.6, "nc": 0.5},
-                "soe_bonus": 10,
-                "preferred_buyers": ["org-sanral", "org-transnet"],
+                "funding_suitability": {
+                    "bee_level_weight": 0.25,
+                    "award_value_weight": 0.20,
+                    "forensic_risk_weight": 0.20,
+                    "sector_alignment_weight": 0.15,
+                    "track_record_weight": 0.10,
+                    "restricted_supplier_exclusion": True,
+                },
+                "buyer_relationship": {
+                    "count_weight": 40,
+                    "value_weight": 30,
+                    "win_rate_weight": 30,
+                },
+                "buyer_preference": {
+                    "enabled": True,
+                    "province_weights": {"gp": 100, "wc": 85, "kzn": 75, "ec": 60, "mp": 55, "lp": 50, "nw": 50, "fs": 50, "nc": 45},
+                    "preferred_buyers": ["org-sanral", "org-transnet"],
+                    "soe_bonus": 20,
+                    "default_province_weight": 40,
+                    "min_preference_score": 0,
+                },
             },
             enabled=True, updated_by="system",
         ),
