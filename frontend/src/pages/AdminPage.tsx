@@ -122,28 +122,145 @@ function CredentialsTab() {
 
 // ── Filter Config Tab ──
 
-const DEFAULT_FILTER_CONFIG = {
-  min_award_value: 0,
-  max_award_value: 50000000,
-  min_days_since_award: 0,
-  max_days_since_award: 60,
-  provinces: [],
-  categories: [],
-  buyer_orgs: [],
-  exclude_buyer_orgs: [],
-  entity_types: ['provincial', 'municipal', 'national'],
-  min_funding_suitability: 0,
-  exclude_restricted_suppliers: true,
-};
+const ALL_PROVINCES = [
+  { value: 'gp', label: 'GP (Gauteng)' },
+  { value: 'wc', label: 'WC (Western Cape)' },
+  { value: 'kzn', label: 'KZN (KwaZulu-Natal)' },
+  { value: 'ec', label: 'EC (Eastern Cape)' },
+  { value: 'mp', label: 'MP (Mpumalanga)' },
+  { value: 'lp', label: 'LP (Limpopo)' },
+  { value: 'nw', label: 'NW (North West)' },
+  { value: 'fs', label: 'FS (Free State)' },
+  { value: 'nc', label: 'NC (Northern Cape)' },
+];
+
+const ALL_ENTITY_TYPES = [
+  { value: 'national', label: 'National' },
+  { value: 'provincial', label: 'Provincial' },
+  { value: 'soe', label: 'SOE' },
+  { value: 'municipal', label: 'Municipal' },
+];
+
+const ALL_CATEGORIES = [
+  { value: 'construction', label: 'Construction' },
+  { value: 'infrastructure', label: 'Infrastructure' },
+  { value: 'it-services', label: 'IT Services' },
+  { value: 'consulting', label: 'Consulting' },
+  { value: 'security-guarding', label: 'Security Guarding' },
+  { value: 'cleaning', label: 'Cleaning' },
+  { value: 'catering', label: 'Catering' },
+  { value: 'facilities-management', label: 'Facilities Management' },
+];
+
+function ChipSelector({ label, available, selected, onChange }: {
+  label: string;
+  available: { value: string; label: string }[];
+  selected: string[];
+  onChange: (values: string[]) => void;
+}) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [custom, setCustom] = useState('');
+
+  function toggle(val: string) {
+    if (selected.includes(val)) {
+      onChange(selected.filter(v => v !== val));
+    } else {
+      onChange([...selected, val]);
+    }
+  }
+
+  function addCustom() {
+    const v = custom.trim().toLowerCase();
+    if (v && !selected.includes(v)) {
+      onChange([...selected, v]);
+    }
+    setCustom('');
+    setShowAdd(false);
+  }
+
+  return (
+    <div>
+      <label className="block text-xs text-gray-400 mb-1.5">{label}</label>
+      <div className="flex flex-wrap gap-1.5 mb-1.5">
+        {available.map(a => {
+          const on = selected.includes(a.value);
+          return (
+            <button
+              key={a.value}
+              type="button"
+              onClick={() => toggle(a.value)}
+              className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                on
+                  ? 'bg-primary-500/20 border-primary-500/40 text-primary-300'
+                  : 'bg-surface-300 border-surface-400 text-gray-400 hover:text-gray-300'
+              }`}
+            >
+              {a.label}
+            </button>
+          );
+        })}
+        {selected.filter(v => !available.find(a => a.value === v)).map(v => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => toggle(v)}
+            className="text-xs px-2.5 py-1 rounded-full border bg-amber-500/20 border-amber-500/40 text-amber-300"
+          >
+            {v} <span className="ml-1">&times;</span>
+          </button>
+        ))}
+      </div>
+      {showAdd ? (
+        <div className="flex gap-1.5">
+          <input
+            type="text"
+            value={custom}
+            onChange={e => setCustom(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addCustom())}
+            placeholder="Type and press Enter"
+            className="flex-1 bg-surface-300 border border-surface-400 rounded px-2 py-1 text-xs text-white placeholder-gray-500"
+            autoFocus
+          />
+          <button type="button" onClick={addCustom} className="text-xs text-primary-400 hover:text-primary-300">Add</button>
+          <button type="button" onClick={() => setShowAdd(false)} className="text-xs text-gray-500">Cancel</button>
+        </div>
+      ) : (
+        <button type="button" onClick={() => setShowAdd(true)} className="text-xs text-gray-500 hover:text-gray-300">
+          + Add custom
+        </button>
+      )}
+    </div>
+  );
+}
+
+function FilterCard({ title, enabled, onToggle, children }: {
+  title: string;
+  enabled: boolean;
+  onToggle: (v: boolean) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="p-4 bg-surface-300 rounded-lg space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-medium text-white">{title}</h3>
+        <label className="relative inline-flex items-center cursor-pointer">
+          <input type="checkbox" checked={enabled} onChange={e => onToggle(e.target.checked)} className="sr-only peer" />
+          <div className="w-9 h-5 bg-surface-400 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary-600" />
+        </label>
+      </div>
+      {enabled && children}
+    </div>
+  );
+}
 
 function FilterConfigTab() {
   const queryClient = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ['admin-filter-config'], queryFn: () => admin.getFilterConfig().then(r => r.data) });
-  const [config, setConfig] = useState(DEFAULT_FILTER_CONFIG);
+  const [config, setConfig] = useState<Record<string, unknown>>({});
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    if (data?.value) setConfig({ ...DEFAULT_FILTER_CONFIG, ...data.value });
+    if (data?.value) setConfig(data.value);
   }, [data]);
 
   const mutation = useMutation({
@@ -155,6 +272,26 @@ function FilterConfigTab() {
     },
   });
 
+  function getSection(section: string): Record<string, unknown> {
+    return (config[section] as Record<string, unknown>) || {};
+  }
+
+  function getRule(section: string): Record<string, unknown> {
+    const rules = getSection(section).rules as Record<string, unknown>[] | undefined;
+    return rules?.[0] || {};
+  }
+
+  function updateSection(section: string, patch: Record<string, unknown>) {
+    setConfig(c => ({ ...c, [section]: { ...(c[section] as object || {}), ...patch } }));
+  }
+
+  function updateRule(section: string, patch: Record<string, unknown>) {
+    const sectionObj = getSection(section);
+    const rules = (sectionObj.rules as Record<string, unknown>[]) || [{}];
+    const newRules = [{ ...rules[0], ...patch }];
+    setConfig(c => ({ ...c, [section]: { ...sectionObj, rules: newRules } }));
+  }
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     mutation.mutate(config);
@@ -165,41 +302,143 @@ function FilterConfigTab() {
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <h2 className="text-lg font-semibold text-white mb-4">Qualification Filters</h2>
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm text-gray-300 mb-1">Min Award Value</label>
-          <input type="number" value={config.min_award_value} onChange={e => setConfig(c => ({ ...c, min_award_value: +e.target.value }))} className="w-full bg-surface-300 border border-surface-400 rounded-lg px-3 py-2 text-sm text-white" />
+      <p className="text-xs text-gray-500 -mt-3 mb-2">Toggle each filter on/off. Tenders that fail any enabled filter are excluded from opportunities.</p>
+
+      {/* Value Range */}
+      <FilterCard title="Value Range" enabled={!!getSection('value_range').enabled} onToggle={v => updateSection('value_range', { enabled: v })}>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Min estimated value (R)</label>
+            <input type="number" value={getRule('value_range').min as number ?? ''} onChange={e => updateRule('value_range', { min: e.target.value ? +e.target.value : null })} className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white" placeholder="500000" />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Max estimated value (R)</label>
+            <input type="number" value={getRule('value_range').max as number ?? ''} onChange={e => updateRule('value_range', { max: e.target.value ? +e.target.value : null })} className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white" placeholder="No max" />
+          </div>
         </div>
-        <div>
-          <label className="block text-sm text-gray-300 mb-1">Max Award Value</label>
-          <input type="number" value={config.max_award_value} onChange={e => setConfig(c => ({ ...c, max_award_value: +e.target.value }))} className="w-full bg-surface-300 border border-surface-400 rounded-lg px-3 py-2 text-sm text-white" />
+      </FilterCard>
+
+      {/* Sector */}
+      <FilterCard title="Sector / Category" enabled={!!getSection('sector').enabled} onToggle={v => updateSection('sector', { enabled: v })}>
+        {(() => {
+          const rules = (getSection('sector').rules as Record<string, unknown>[]) || [];
+          const includeRule = rules.find(r => r.type === 'include');
+          const excludeRule = rules.find(r => r.type === 'exclude');
+          return (
+            <div className="space-y-3">
+              <ChipSelector
+                label="Include categories"
+                available={ALL_CATEGORIES}
+                selected={(includeRule?.values as string[]) || []}
+                onChange={vals => {
+                  const newRules = rules.filter(r => r.type !== 'include');
+                  if (vals.length) newRules.push({ type: 'include', values: vals, field: 'category_id' });
+                  updateSection('sector', { rules: newRules });
+                }}
+              />
+              <ChipSelector
+                label="Exclude categories"
+                available={ALL_CATEGORIES}
+                selected={(excludeRule?.values as string[]) || []}
+                onChange={vals => {
+                  const newRules = rules.filter(r => r.type !== 'exclude');
+                  if (vals.length) newRules.push({ type: 'exclude', values: vals, field: 'category_id' });
+                  updateSection('sector', { rules: newRules });
+                }}
+              />
+            </div>
+          );
+        })()}
+      </FilterCard>
+
+      {/* Province */}
+      <FilterCard title="Province" enabled={!!getSection('province').enabled} onToggle={v => updateSection('province', { enabled: v })}>
+        {(() => {
+          const rule = getRule('province');
+          const vals = (rule.values as string[]) || [];
+          return (
+            <ChipSelector
+              label="Allowed provinces"
+              available={ALL_PROVINCES}
+              selected={vals}
+              onChange={vals => updateRule('province', { type: 'include', values: vals })}
+            />
+          );
+        })()}
+      </FilterCard>
+
+      {/* Entity Type */}
+      <FilterCard title="Entity Type" enabled={!!getSection('entity_type').enabled} onToggle={v => updateSection('entity_type', { enabled: v })}>
+        {(() => {
+          const rule = getRule('entity_type');
+          const vals = (rule.values as string[]) || [];
+          return (
+            <ChipSelector
+              label="Allowed buyer entity types"
+              available={ALL_ENTITY_TYPES}
+              selected={vals}
+              onChange={vals => updateRule('entity_type', { type: 'include', values: vals })}
+            />
+          );
+        })()}
+      </FilterCard>
+
+      {/* BEE Level */}
+      <FilterCard title="BEE Level" enabled={!!getSection('bee_level').enabled} onToggle={v => updateSection('bee_level', { enabled: v })}>
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Min level (1 = best)</label>
+            <input type="number" min="1" max="4" value={getRule('bee_level').min_level as number ?? ''} onChange={e => updateRule('bee_level', { min_level: e.target.value ? +e.target.value : null })} className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white" />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Max level</label>
+            <input type="number" min="1" max="4" value={getRule('bee_level').max_level as number ?? ''} onChange={e => updateRule('bee_level', { max_level: e.target.value ? +e.target.value : null })} className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white" />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Min BEE points</label>
+            <input type="number" min="0" max="100" value={getRule('bee_level').min_points as number ?? ''} onChange={e => updateRule('bee_level', { min_points: e.target.value ? +e.target.value : null })} className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white" />
+          </div>
         </div>
-        <div>
-          <label className="block text-sm text-gray-300 mb-1">Min Days Since Award</label>
-          <input type="number" value={config.min_days_since_award} onChange={e => setConfig(c => ({ ...c, min_days_since_award: +e.target.value }))} className="w-full bg-surface-300 border border-surface-400 rounded-lg px-3 py-2 text-sm text-white" />
+      </FilterCard>
+
+      {/* Risk Exclusion */}
+      <FilterCard title="Risk Exclusion" enabled={!!getSection('risk_exclusion').enabled} onToggle={v => updateSection('risk_exclusion', { enabled: v })}>
+        <div className="space-y-3">
+          <label className="flex items-center gap-2 text-sm text-gray-300">
+            <input
+              type="checkbox"
+              checked={!!getRule('risk_exclusion').exclude_if_restricted}
+              onChange={e => updateRule('risk_exclusion', { exclude_if_restricted: e.target.checked })}
+              className="rounded"
+            />
+            Exclude restricted suppliers
+          </label>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Max forensic risk score (0–100)</label>
+            <input
+              type="number" min="0" max="100" value={getRule('risk_exclusion').max_forensic_score as number ?? ''}
+              onChange={e => updateRule('risk_exclusion', { max_forensic_score: e.target.value ? +e.target.value : null })}
+              className="w-32 bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white"
+            />
+          </div>
         </div>
+      </FilterCard>
+
+      {/* Preference */}
+      <FilterCard title="Buyer Preference" enabled={!!getSection('preference').enabled} onToggle={v => updateSection('preference', { enabled: v })}>
         <div>
-          <label className="block text-sm text-gray-300 mb-1">Max Days Since Award</label>
-          <input type="number" value={config.max_days_since_award} onChange={e => setConfig(c => ({ ...c, max_days_since_award: +e.target.value }))} className="w-full bg-surface-300 border border-surface-400 rounded-lg px-3 py-2 text-sm text-white" />
+          <label className="block text-xs text-gray-400 mb-1">Min preference score (0–100)</label>
+          <input
+            type="number" min="0" max="100" value={getRule('preference').min_score as number ?? ''}
+            onChange={e => updateRule('preference', { min_score: e.target.value ? +e.target.value : null })}
+            className="w-32 bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white"
+          />
         </div>
-      </div>
-      <div>
-        <label className="block text-sm text-gray-300 mb-1">Entity Types (comma-separated)</label>
-        <input type="text" value={config.entity_types?.join(', ') || ''} onChange={e => setConfig(c => ({ ...c, entity_types: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }))} className="w-full bg-surface-300 border border-surface-400 rounded-lg px-3 py-2 text-sm text-white" />
-      </div>
-      <div>
-        <label className="flex items-center gap-2 text-sm text-gray-300">
-          <input type="checkbox" checked={!!config.exclude_restricted_suppliers} onChange={e => setConfig(c => ({ ...c, exclude_restricted_suppliers: e.target.checked }))} className="rounded" />
-          Exclude restricted suppliers
-        </label>
-      </div>
-      <div>
-        <label className="block text-sm text-gray-300 mb-1">Min Funding Suitability</label>
-        <input type="number" min="0" max="1" step="0.05" value={config.min_funding_suitability} onChange={e => setConfig(c => ({ ...c, min_funding_suitability: +e.target.value }))} className="w-full bg-surface-300 border border-surface-400 rounded-lg px-3 py-2 text-sm text-white" />
-      </div>
-      <div className="flex items-center gap-3">
+      </FilterCard>
+
+      <div className="flex items-center gap-3 pt-2">
         <button type="submit" className="btn-primary px-4 py-2 rounded-lg text-sm" disabled={mutation.isPending}>
-          {mutation.isPending ? 'Saving...' : 'Save'}
+          {mutation.isPending ? 'Saving...' : 'Save Filters'}
         </button>
         {saved && <span className="text-emerald-400 text-sm">Saved</span>}
         {mutation.isError && <span className="text-red-400 text-sm">Error saving</span>}
