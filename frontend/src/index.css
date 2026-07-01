@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #3e3e56 transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: #3e3e56;
+    border-radius: 3px;
+  }
+
+  body {
+    @apply min-h-screen;
+  }
+}
+
+@layer components {
+  .card-hover {
+    @apply transition-all duration-200 hover:border-primary-500/40 hover:shadow-lg hover:shadow-primary-500/5;
+  }
+
+  .glass {
+    @apply bg-surface-200/80 backdrop-blur-sm border border-surface-300;
+  }
+
+  .badge-green {
+    @apply bg-emerald-500/10 text-emerald-400 border border-emerald-500/20;
+  }
+
+  .badge-amber {
+    @apply bg-amber-500/10 text-amber-400 border border-amber-500/20;
+  }
+
+  .badge-red {
+    @apply bg-red-500/10 text-red-400 border border-red-500/20;
+  }
+}

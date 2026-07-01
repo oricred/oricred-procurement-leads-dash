@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: oricred
+      POSTGRES_USER: oricred
+      POSTGRES_PASSWORD: oricred
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      ORICRED_DATABASE_URL: postgresql+asyncpg://oricred:oricred@postgres:5432/oricred
+      ORICRED_REDIS_URL: redis://redis:6379/0
+      ORICRED_TSA_API_KEY: ${TSA_API_KEY}
+      ORICRED_JWT_SECRET: ${JWT_SECRET:-change-me}
+      ORICRED_SESSION_SECRET: ${SESSION_SECRET:-change-me}
+      ORICRED_DEBUG: "true"
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+
+volumes:
+  pgdata:
