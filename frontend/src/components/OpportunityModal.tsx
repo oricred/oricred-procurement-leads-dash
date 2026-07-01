@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X, Building2, Award, Users, FileText, TrendingUp, Shield, BarChart3 } from 'lucide-react';
-import { opportunities, buyerRelationships } from '../services/api';
+import { X, Building2, Award, Users, FileText, TrendingUp, Shield, BarChart3, Activity } from 'lucide-react';
+import { opportunities, buyerRelationships, crmActivity } from '../services/api';
 import type { Opportunity } from '../types';
 
 interface Props {
@@ -25,6 +25,16 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
       return res.data;
     },
     enabled: true,
+  });
+
+  const { data: crmData } = useQuery({
+    queryKey: ['crm-activity', opp.id],
+    queryFn: async () => {
+      const res = await crmActivity.get(opp.id);
+      return res.data;
+    },
+    enabled: true,
+    refetchInterval: 30_000,
   });
 
   const sufficiencyIcons: Record<string, string> = { sufficient: '✓', role_based: '⚠', none: '✗' };
@@ -202,6 +212,26 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
             </div>
           </div>
         </div>
+
+        {/* CRM Activity */}
+        {crmData?.activities != null && crmData.activities.length > 0 && (
+          <div className="glass rounded-xl p-4 mt-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Activity className="w-4 h-4 text-primary-400" />
+              <h3 className="text-sm font-semibold text-gray-200">Monday.com Activity</h3>
+            </div>
+            <div className="space-y-2 text-sm max-h-40 overflow-y-auto">
+              {crmData.activities.map((act, i) => (
+                <div key={i} className="flex items-start gap-2 text-xs text-gray-400 border-b border-surface-300 pb-1.5 last:border-0">
+                  <span className="text-gray-500 font-mono shrink-0">
+                    {new Date(act.created_at).toLocaleDateString()}
+                  </span>
+                  <span className="text-gray-300">{act.event.replace(/_/g, ' ')}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Notes */}
         {opp.notes && (

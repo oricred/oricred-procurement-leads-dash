@@ -85,3 +85,10 @@ export const funding = {
   compute: (opportunityId: string) =>
     api.post<{ funding_suitability: number }>(`/opportunities/${opportunityId}/compute-funding`),
 };
+
+export const crmActivity = {
+  get: (opportunityId: string) =>
+    api.get<{ activities: Array<{ event: string; data: Record<string, unknown>; created_at: string }> }>(
+      `/opportunities/${opportunityId}/crm-activity`
+    ),
+};

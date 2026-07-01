@@ -15,6 +15,7 @@ from app.schemas.opportunity import OpportunityRead, OpportunityStageUpdate, Opp
 from app.schemas.buyer_relationship import BuyerRelationshipRead
 from app.services.buyer_relationship import compute_relationship, get_relationship
 from app.services.funding_suitability import compute_funding_suitability
+from app.services.crm.sync import push_opportunity_to_crm
 
 router = APIRouter()
 
@@ -143,6 +144,8 @@ async def update_stage(
     await db.commit()
     await db.refresh(opp)
 
+    await push_opportunity_to_crm(opportunity_id)
+
     return _opportunity_to_read(opp)
 
 
@@ -227,3 +230,53 @@ async def compute_opportunity_funding(opportunity_id: str, db: AsyncSession = De
     await db.commit()
 
     return {"funding_suitability": score}
+
+
+@router.get("/{opportunity_id}/crm-activity")
+async def get_crm_activity(opportunity_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Opportunity).where(Opportunity.id == opportunity_id)
+    )
+    opp = result.scalar_one_or_none()
+    if not opp:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+
+    from app.config import settings
+    from app.services.crm.monday import MondayDotComAdapter
+
+    api_key = settings.monday_api_key
+    if not api_key:
+        return {"activities": []}
+
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    adapter = MondayDotComAdapter(api_key)
+
+    try:
+        activities = await adapter.get_recent_activity("oricred_opportunities", today)
+    finally:
+        await adapter.close()
+
+    company_name = None
+    if opp.company_id:
+        c_result = await db.execute(select(Company).where(Company.id == opp.company_id))
+        company = c_result.scalar_one_or_none()
+        if company:
+            company_name = company.name
+
+    filtered = []
+    for act in activities:
+        item_name = (act.data or {}).get("item_name", "")
+        if company_name and company_name.lower() in item_name.lower():
+            filtered.append({
+                "event": act.event,
+                "data": act.data,
+                "created_at": act.created_at.isoformat(),
+            })
+        elif not company_name:
+            filtered.append({
+                "event": act.event,
+                "data": act.data,
+                "created_at": act.created_at.isoformat(),
+            })
+
+    return {"activities": filtered[:20]}

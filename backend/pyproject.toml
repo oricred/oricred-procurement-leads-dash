@@ -18,6 +18,8 @@ dependencies = [
     "passlib[bcrypt]>=1.7",
     "python-multipart>=0.0.9",
     "structlog>=24.0",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
 ]
 
 [tool.setuptools.packages.find]

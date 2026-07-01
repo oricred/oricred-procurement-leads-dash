@@ -15,6 +15,7 @@ from app.models.past_due import PastDueQueue
 from app.services.contact_sufficiency import ContactSufficiencyService
 from app.services.competitor_intel import CompetitorIntelService
 from app.services.email_alert import EmailAlertService
+from app.services.crm.sync import push_opportunity_to_crm
 
 logger = structlog.get_logger()
 
@@ -136,6 +137,8 @@ async def check_awards_for_watching():
                             award_date=str(raw.get("award_date", "")),
                             dashboard_url="/opportunities/" + str(opp.id),
                         )
+
+                        await push_opportunity_to_crm(str(opp.id))
 
                     wl.status = "awarded"
                     wl.awarded_at = now
