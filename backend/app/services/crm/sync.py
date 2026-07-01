@@ -80,12 +80,9 @@ async def push_opportunity_to_crm(opportunity_id: str) -> None:
         if opp.risk_flag:
             column_values["status_2"] = opp.risk_flag
 
-        item_id_key = f"crm_item_id_{BOARD_ID}"
-        existing_id = getattr(opp, item_id_key, None)
-
-        if existing_id:
+        if opp.crm_item_id:
             for col_id, value in column_values.items():
-                await adapter.update_column_value(existing_id, col_id, value)
+                await adapter.update_column_value(opp.crm_item_id, col_id, value)
             logger.info("crm_opportunity_updated", opportunity_id=opportunity_id)
         else:
             item_id = await adapter.create_item(
@@ -94,6 +91,8 @@ async def push_opportunity_to_crm(opportunity_id: str) -> None:
                 name=item_name,
                 column_values=column_values,
             )
+            opp.crm_item_id = item_id
+            await db.commit()
             logger.info("crm_opportunity_created", opportunity_id=opportunity_id, crm_item_id=item_id)
 
 

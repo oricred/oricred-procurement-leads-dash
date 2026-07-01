@@ -214,22 +214,44 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
         </div>
 
         {/* CRM Activity */}
-        {crmData?.activities != null && crmData.activities.length > 0 && (
+        {crmData?.activities != null && (
           <div className="glass rounded-xl p-4 mt-4">
             <div className="flex items-center gap-2 mb-3">
               <Activity className="w-4 h-4 text-primary-400" />
               <h3 className="text-sm font-semibold text-gray-200">Monday.com Activity</h3>
             </div>
-            <div className="space-y-2 text-sm max-h-40 overflow-y-auto">
-              {crmData.activities.map((act, i) => (
-                <div key={i} className="flex items-start gap-2 text-xs text-gray-400 border-b border-surface-300 pb-1.5 last:border-0">
-                  <span className="text-gray-500 font-mono shrink-0">
-                    {new Date(act.created_at).toLocaleDateString()}
-                  </span>
-                  <span className="text-gray-300">{act.event.replace(/_/g, ' ')}</span>
-                </div>
-              ))}
-            </div>
+            {crmData.activities.length === 0 ? (
+              <p className="text-xs text-gray-500">No recent activity</p>
+            ) : (
+              <div className="space-y-2 text-sm max-h-40 overflow-y-auto">
+                {crmData.activities.map((act, i) => (
+                  <div key={i} className="border-b border-surface-300 pb-2 last:border-0">
+                    <div className="flex items-start gap-2 text-xs">
+                      <span className="text-gray-500 font-mono shrink-0">
+                        {new Date(act.created_at).toLocaleDateString()}
+                      </span>
+                      <span className="text-gray-300 capitalize">{act.event.replace(/_/g, ' ')}</span>
+                    </div>
+                    {act.data && (() => {
+                      const d = act.data as Record<string, string>;
+                      return (
+                        <div className="mt-1 ml-0 text-xs text-gray-500 space-y-0.5">
+                          {d.item_name && <div><span className="text-gray-600">Item:</span> {d.item_name}</div>}
+                          {d.column_name && <div><span className="text-gray-600">Column:</span> {d.column_name}</div>}
+                          {d.old_value != null && (
+                            <div className="flex gap-2">
+                              <span className="text-gray-600">Changed:</span>
+                              <span className="line-through text-red-400/70">{d.old_value}</span>
+                              <span className="text-emerald-400">&rarr; {d.new_value ?? '(empty)'}</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

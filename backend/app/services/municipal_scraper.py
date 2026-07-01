@@ -202,11 +202,8 @@ class CityOfJoburgAdapter(MunicipalPortalAdapter):
                     continue
 
                 ref = cols[1].get_text(strip=True) if len(cols) > 1 else ""
-                # Some tables have ref in col 0
                 if not ref or not ref.startswith("COJ"):
-                    # Try col 0
                     ref = cols[0].get_text(strip=True) if cols else ""
-                # Description might be in a sibling col
                 desc = ""
                 closing_text = ""
                 if len(cols) >= 3:
@@ -229,6 +226,9 @@ class CityOfJoburgAdapter(MunicipalPortalAdapter):
                         closing_date = datetime.strptime(closing_text, "%d %B %Y")
                 except (ValueError, IndexError):
                     pass
+
+                if not closing_date or closing_date < since:
+                    continue
 
                 estimated_value = self._extract_value(desc)
 

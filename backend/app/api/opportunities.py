@@ -160,6 +160,7 @@ async def assign_opportunity(opportunity_id: str, assignee: str, db: AsyncSessio
     opp.assigned_to = assignee
     opp.updated_at = datetime.now(timezone.utc)
     await db.commit()
+    await push_opportunity_to_crm(opportunity_id)
     return {"status": "ok", "assigned_to": assignee}
 
 

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Opportunity, Stage, RadarData, WatchlistItem, DashboardStats } from '../types';
+import type { Opportunity, Stage, RadarData, WatchlistItem, DashboardStats, User } from '../types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -64,6 +64,25 @@ export const admin = {
   getFilterConfig: () => api.get('/admin/filter-config'),
   updateFilterConfig: (config: Record<string, unknown>) =>
     api.put('/admin/filter-config', config),
+  getSettings: () => api.get('/admin/settings'),
+  getCredentials: () => api.get('/admin/credentials'),
+  updateCredentials: (body: Record<string, string>) => api.put('/admin/credentials', body),
+  getScrapers: () => api.get('/admin/scrapers'),
+  updateScrapers: (body: Record<string, unknown>) => api.put('/admin/scrapers', body),
+  getNotifications: () => api.get('/admin/notifications'),
+  updateNotifications: (body: Record<string, unknown>) => api.put('/admin/notifications', body),
+  getScoring: () => api.get('/admin/scoring'),
+  updateScoring: (body: Record<string, unknown>) => api.put('/admin/scoring', body),
+  getJobs: () => api.get('/admin/jobs'),
+  updateJobs: (body: Record<string, unknown>) => api.put('/admin/jobs', body),
+  getJobHistory: (limit = 50) => api.get('/admin/jobs/history', { params: { limit } }),
+  triggerJob: (jobName: string) => api.post(`/admin/jobs/${jobName}/trigger`),
+  listUsers: () => api.get<User[]>('/admin/users'),
+  createUser: (body: { email: string; password: string; name: string; role: string }) =>
+    api.post<User>('/admin/users', body),
+  updateUser: (userId: string, body: Record<string, string>) =>
+    api.put<User>(`/admin/users/${userId}`, body),
+  deleteUser: (userId: string) => api.delete(`/admin/users/${userId}`),
 };
 
 export const buyerRelationships = {

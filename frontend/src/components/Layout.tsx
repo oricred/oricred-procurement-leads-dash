@@ -1,17 +1,21 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { TrendingUp, Columns, Eye, LogOut, Activity } from 'lucide-react';
-import { dashboard } from '../services/api';
+import { TrendingUp, Columns, Eye, LogOut, Activity, Shield } from 'lucide-react';
+import { auth, dashboard } from '../services/api';
 import { useState } from 'react';
-
-const navItems = [
-  { path: '/pipeline', label: 'Pipeline', icon: Columns },
-  { path: '/watching', label: 'Watching', icon: Eye },
-];
 
 export default function Layout() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const { data: user } = useQuery({
+    queryKey: ['me'],
+    queryFn: async () => {
+      const res = await auth.me();
+      return res.data;
+    },
+    staleTime: 60_000,
+  });
 
   const { data: stats } = useQuery({
     queryKey: ['dashboard-stats'],
@@ -21,6 +25,8 @@ export default function Layout() {
     },
     refetchInterval: 30_000,
   });
+
+  const isAdmin = user?.role === 'admin';
 
   const handleLogout = () => {
     localStorage.removeItem('token');
@@ -44,7 +50,11 @@ export default function Layout() {
         </div>
 
         <nav className="flex-1 p-3 space-y-1">
-          {navItems.map(({ path, label, icon: Icon }) => (
+          {[
+            { path: '/pipeline', label: 'Pipeline', icon: Columns },
+            { path: '/watching', label: 'Watching', icon: Eye },
+            ...(isAdmin ? [{ path: '/admin', label: 'Admin', icon: Shield }] : []),
+          ].map(({ path, label, icon: Icon }) => (
             <NavLink
               key={path}
               to={path}

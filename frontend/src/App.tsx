@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import Layout from './components/Layout';
 import PipelinePage from './pages/PipelinePage';
 import WatchingPage from './pages/WatchingPage';
+import AdminPage from './pages/AdminPage';
 import LoginPage from './pages/LoginPage';
 import { auth } from './services/api';
 
@@ -48,6 +49,7 @@ export default function App() {
         <Route index element={<Navigate to="/pipeline" replace />} />
         <Route path="pipeline" element={<PipelinePage />} />
         <Route path="watching" element={<WatchingPage />} />
+        <Route path="admin" element={<AdminPage />} />
       </Route>
     </Routes>
   );
