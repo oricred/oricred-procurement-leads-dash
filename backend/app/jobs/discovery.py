@@ -16,9 +16,12 @@ from app.services.admin_config import get_config
 
 logger = structlog.get_logger()
 
-SCRAPER_MAP = {
-    "joburg": ("City of Johannesburg", CityOfJoburgAdapter),
-    "capetown": ("City of Cape Town", CityOfCapeTownAdapter),
+SOURCE_MAP = {
+    "joburg": ("municipal", "City of Johannesburg", CityOfJoburgAdapter),
+    "capetown": ("municipal", "City of Cape Town", CityOfCapeTownAdapter),
+    "ocpo": ("api", "OCPO", None),
+    "etenders": ("api", "e-Tenders", None),
+    "tsa_ocp": ("api", "Tenders-SA OCP", None),
 }
 
 
@@ -146,35 +149,46 @@ async def discover_new_tenders():
             for raw in raw_tenders:
                 count += await _process_tender(raw, db, now)
 
-            # Discover municipal tenders
+            # Discover tenders from all sources
             try:
-                scraper_config = await get_config("admin_scrapers", db)
-                enabled = scraper_config.get("enabled", [])
-                metros = scraper_config.get("metros", {})
+                src_config = await get_config("admin_sources", db)
+                enabled = src_config.get("enabled", [])
+                metros = src_config.get("metros", {})
+                api_sources = src_config.get("api_sources", {})
             except Exception:
                 enabled = ["joburg", "capetown"]
                 metros = {}
+                api_sources = {}
 
-            scraper_since = now - timedelta(days=7)
-            for metro_key in enabled:
-                meta = SCRAPER_MAP.get(metro_key)
+            source_since = now - timedelta(days=7)
+            for src_key in enabled:
+                meta = SOURCE_MAP.get(src_key)
                 if not meta:
                     continue
-                metro_name, adapter_cls = meta
-                metro_config = metros.get(metro_key, {})
-                if not metro_config.get("enabled", True):
-                    continue
+                src_type, src_name, adapter_cls = meta
 
-                adapter = adapter_cls()
-                try:
-                    results = await adapter.get_new_tenders(scraper_since)
-                    for res in results:
-                        count += await _process_scraper_tender(res, metro_key, db, now)
-                    logger.info("municipal_tenders_fetched", metro=metro_key, count=len(results))
-                except Exception as e:
-                    logger.error("municipal_scraper_failed", metro=metro_key, error=str(e))
-                finally:
-                    await adapter.close()
+                if src_type == "municipal":
+                    src_config_section = metros.get(src_key, {})
+                    if not src_config_section.get("enabled", True):
+                        continue
+                    if not adapter_cls:
+                        continue
+                    adapter = adapter_cls()
+                    try:
+                        results = await adapter.get_new_tenders(source_since)
+                        for res in results:
+                            count += await _process_scraper_tender(res, src_key, db, now)
+                        logger.info("source_tenders_fetched", source=src_key, count=len(results))
+                    except Exception as e:
+                        logger.error("source_fetch_failed", source=src_key, error=str(e))
+                    finally:
+                        await adapter.close()
+
+                elif src_type == "api":
+                    src_config = api_sources.get(src_key, {})
+                    if not src_config.get("enabled", False):
+                        continue
+                    logger.info("api_source_configured", source=src_key, name=src_name, base_url=src_config.get("base_url"))
 
             await db.commit()
             logger.info("tenders_discovered", new=count)

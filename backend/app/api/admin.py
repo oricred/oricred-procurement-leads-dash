@@ -93,14 +93,14 @@ async def update_filter_config(config: dict, db: AsyncSession = Depends(get_db),
 
 # ── Scrapers ──
 
-@router.get("/scrapers")
-async def get_scrapers(db: AsyncSession = Depends(get_db)):
-    return await get_config("admin_scrapers", db)
+@router.get("/sources")
+async def get_sources(db: AsyncSession = Depends(get_db)):
+    return await get_config("admin_sources", db)
 
 
-@router.put("/scrapers")
-async def update_scrapers(body: dict, db: AsyncSession = Depends(get_db), current_user: dict = Depends(_require_admin)):
-    await save_config("admin_scrapers", body, current_user["user_id"], db)
+@router.put("/sources")
+async def update_sources(body: dict, db: AsyncSession = Depends(get_db), current_user: dict = Depends(_require_admin)):
+    await save_config("admin_sources", body, current_user["user_id"], db)
     return {"status": "ok"}
 
 

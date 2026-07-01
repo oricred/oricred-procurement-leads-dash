@@ -17,7 +17,7 @@ DEFAULT_CREDENTIALS = {
     "email_from": "noreply@oricred.com",
 }
 
-DEFAULT_SCRAPERS = {
+DEFAULT_SOURCES = {
     "enabled": ["joburg", "capetown"],
     "metros": {
         "joburg": {"enabled": True, "base_url": "https://coj-prod-fbdjhcbbezcbeeeu.a03.azurefd.net", "province": "gp", "name": "City of Johannesburg"},
@@ -26,6 +26,11 @@ DEFAULT_SCRAPERS = {
         "ekurhuleni": {"enabled": False, "base_url": "", "province": "gp", "name": "City of Ekurhuleni"},
         "tshwane": {"enabled": False, "base_url": "", "province": "gp", "name": "City of Tshwane"},
         "nelsonmandelabay": {"enabled": False, "base_url": "", "province": "ec", "name": "Nelson Mandela Bay"},
+    },
+    "api_sources": {
+        "ocpo": {"enabled": False, "base_url": "https://ocpo.gov.za/api", "api_key": "", "name": "OCPO — Office of the Chief Procurement Officer"},
+        "etenders": {"enabled": False, "base_url": "https://etenders.treasury.gov.za/api", "api_key": "", "name": "e-Tenders Portal"},
+        "tsa_ocp": {"enabled": False, "base_url": "https://api.tenders-sa.org/ocp", "api_key": "", "name": "Tenders-SA OCP API"},
     },
 }
 
@@ -81,7 +86,7 @@ DEFAULT_JOBS = {
 
 CONFIG_DEFAULTS: dict[str, tuple[dict, str]] = {
     "admin_credentials": (DEFAULT_CREDENTIALS, "API credentials and SMTP settings"),
-    "admin_scrapers": (DEFAULT_SCRAPERS, "Municipal scraper configuration"),
+    "admin_sources": (DEFAULT_SOURCES, "Data source configuration (municipal portals + API sources)"),
     "admin_notifications": (DEFAULT_NOTIFICATIONS, "Email notification settings"),
     "admin_scoring": (DEFAULT_SCORING, "Scoring weights and parameters"),
     "admin_jobs": (DEFAULT_JOBS, "Scheduled job configuration"),

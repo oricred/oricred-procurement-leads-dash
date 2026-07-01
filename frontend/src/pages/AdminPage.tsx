@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Key, SlidersHorizontal, Bell, Cpu, Users, Clock, AlertTriangle, Play, Trash2, Plus, Filter,
+  Key, SlidersHorizontal, Bell, Database, Users, Clock, AlertTriangle, Play, Trash2, Plus, Filter,
 } from 'lucide-react';
 import { admin } from '../services/api';
 import type { User } from '../types';
@@ -9,7 +9,7 @@ import type { User } from '../types';
 const TABS = [
   { id: 'credentials', label: 'Credentials', icon: Key },
   { id: 'filter-config', label: 'Filter Config', icon: Filter },
-  { id: 'scrapers', label: 'Scrapers', icon: Cpu },
+  { id: 'sources', label: 'Sources', icon: Database },
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'scoring', label: 'Scoring', icon: SlidersHorizontal },
   { id: 'jobs', label: 'Jobs', icon: Clock },
@@ -40,7 +40,7 @@ export default function AdminPage() {
       <div className="bg-surface-200 border border-surface-300 rounded-lg p-6">
         {activeTab === 'credentials' && <CredentialsTab />}
         {activeTab === 'filter-config' && <FilterConfigTab />}
-        {activeTab === 'scrapers' && <ScrapersTab />}
+        {activeTab === 'sources' && <SourcesTab />}
         {activeTab === 'notifications' && <NotificationsTab />}
         {activeTab === 'scoring' && <ScoringTab />}
         {activeTab === 'jobs' && <JobsTab />}
@@ -192,9 +192,9 @@ function FilterConfigTab() {
 
 // ── Scrapers Tab ──
 
-function ScrapersTab() {
+function SourcesTab() {
   const queryClient = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ['admin-scrapers'], queryFn: () => admin.getScrapers().then(r => r.data) });
+  const { data, isLoading } = useQuery({ queryKey: ['admin-sources'], queryFn: () => admin.getScrapers().then(r => r.data) });
   const [form, setForm] = useState<Record<string, unknown>>({});
   const [saved, setSaved] = useState(false);
 
@@ -202,7 +202,7 @@ function ScrapersTab() {
 
   const mutation = useMutation({
     mutationFn: (body: Record<string, unknown>) => admin.updateScrapers(body),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['admin-scrapers'] }); setSaved(true); setTimeout(() => setSaved(false), 2000); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['admin-sources'] }); setSaved(true); setTimeout(() => setSaved(false), 2000); },
   });
 
   const handleSubmit = (e: React.FormEvent) => { e.preventDefault(); mutation.mutate(form); };
@@ -210,9 +210,12 @@ function ScrapersTab() {
   if (isLoading) return <p className="text-gray-400">Loading...</p>;
 
   const metros = form.metros as Record<string, { enabled: boolean; base_url: string; province: string; name: string }> | undefined;
+  const apiSources = form.api_sources as Record<string, { enabled: boolean; base_url: string; api_key: string; name: string }> | undefined;
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <h2 className="text-lg font-semibold text-white mb-4">Municipal Scrapers</h2>
+      <h2 className="text-lg font-semibold text-white mb-4">Data Sources</h2>
+
+      <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wide">Municipal Portals</h3>
       {metros && Object.entries(metros).map(([key, metro]) => (
         <div key={key} className="p-4 bg-surface-300 rounded-lg space-y-2">
           <div className="flex items-center justify-between">
@@ -236,6 +239,32 @@ function ScrapersTab() {
           </div>
         </div>
       ))}
+
+      <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wide mt-6">API Sources</h3>
+      {apiSources && Object.entries(apiSources).map(([key, src]) => (
+        <div key={key} className="p-4 bg-surface-300 rounded-lg space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-medium text-white">{src.name}</label>
+            <input
+              type="checkbox"
+              checked={src.enabled}
+              onChange={e => setForm(f => ({ ...f, api_sources: { ...apiSources, [key]: { ...src, enabled: e.target.checked } } }))}
+              className="rounded"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block text-xs text-gray-400">Base URL</label>
+              <input type="text" value={src.base_url} onChange={e => setForm(f => ({ ...f, api_sources: { ...apiSources, [key]: { ...src, base_url: e.target.value } } }))} className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white" />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400">API Key</label>
+              <input type="password" value={src.api_key} onChange={e => setForm(f => ({ ...f, api_sources: { ...apiSources, [key]: { ...src, api_key: e.target.value } } }))} className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white" />
+            </div>
+          </div>
+        </div>
+      ))}
+
       <div className="flex items-center gap-3">
         <button type="submit" className="btn-primary px-4 py-2 rounded-lg text-sm" disabled={mutation.isPending}>
           {mutation.isPending ? 'Saving...' : 'Save'}
