@@ -10,7 +10,11 @@ from app.models.opportunity import Opportunity, OpportunityAudit
 from app.models.award import Award
 from app.models.tender import Tender
 from app.models.company import Company
+from app.models.organization import Organization
 from app.schemas.opportunity import OpportunityRead, OpportunityStageUpdate, OpportunityList
+from app.schemas.buyer_relationship import BuyerRelationshipRead
+from app.services.buyer_relationship import compute_relationship, get_relationship
+from app.services.funding_suitability import compute_funding_suitability
 
 router = APIRouter()
 
@@ -154,3 +158,72 @@ async def assign_opportunity(opportunity_id: str, assignee: str, db: AsyncSessio
     opp.updated_at = datetime.now(timezone.utc)
     await db.commit()
     return {"status": "ok", "assigned_to": assignee}
+
+
+@router.get("/{opportunity_id}/relationship", response_model=BuyerRelationshipRead | None)
+async def get_opportunity_relationship(opportunity_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Opportunity).where(Opportunity.id == opportunity_id)
+    )
+    opp = result.scalar_one_or_none()
+    if not opp:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+
+    if not opp.company_id:
+        return None
+
+    tender = None
+    if opp.tender_id:
+        t_result = await db.execute(select(Tender).where(Tender.id == opp.tender_id))
+        tender = t_result.scalar_one_or_none()
+
+    if not tender or not tender.buyer_org_id:
+        return None
+
+    org_result = await db.execute(
+        select(Organization).where(Organization.id == tender.buyer_org_id)
+    )
+    org = org_result.scalar_one_or_none()
+    if not org:
+        return None
+
+    rel = await get_relationship(opp.company_id, org.id, db)
+    if not rel:
+        rel = await compute_relationship(opp.company_id, org.id, db)
+        await db.commit()
+
+    if not rel:
+        return None
+
+    return BuyerRelationshipRead(
+        id=str(rel.id),
+        company_id=rel.company_id,
+        organization_id=rel.organization_id,
+        award_count_12m=rel.award_count_12m,
+        total_award_value_12m=float(rel.total_award_value_12m) if rel.total_award_value_12m else None,
+        avg_response_days=rel.avg_response_days,
+        win_rate=rel.win_rate,
+        last_interaction_at=rel.last_interaction_at,
+        relevance_score=rel.relevance_score,
+        updated_at=rel.updated_at,
+    )
+
+
+@router.post("/{opportunity_id}/compute-funding")
+async def compute_opportunity_funding(opportunity_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Opportunity).where(Opportunity.id == opportunity_id)
+    )
+    opp = result.scalar_one_or_none()
+    if not opp:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+
+    if not opp.company_id:
+        raise HTTPException(status_code=400, detail="Opportunity has no company")
+
+    score = await compute_funding_suitability(opp.company_id, db)
+    opp.funding_suitability = score
+    opp.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return {"funding_suitability": score}

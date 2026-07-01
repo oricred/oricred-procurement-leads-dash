@@ -24,9 +24,11 @@ class Settings(BaseSettings):
     email_from: str = "noreply@oricred.com"
     email_from_name: str = "Oricred Platform"
 
+    monday_api_key: str = ""
+
     session_secret: str = "oricred-dev-secret-change-in-production"
 
-    model_config = {"env_prefix": "ORICRED_"}
+    model_config = {"env_prefix": "ORICRED_", "env_file": "../.env"}
 
     @property
     def sync_database_url(self) -> str:

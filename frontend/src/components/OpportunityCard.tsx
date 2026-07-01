@@ -27,6 +27,19 @@ const riskColors: Record<string, string> = {
   red: 'bg-red-500',
 };
 
+const fundingColors: Record<string, string> = {
+  high: 'text-emerald-400',
+  medium: 'text-amber-400',
+  low: 'text-red-400',
+};
+
+function fundingLabel(score: number | null): { label: string; color: string } | null {
+  if (score == null) return null;
+  if (score >= 75) return { label: 'High', color: fundingColors.high };
+  if (score >= 50) return { label: 'Med', color: fundingColors.medium };
+  return { label: 'Low', color: fundingColors.low };
+}
+
 function formatCurrency(value: number | null): string {
   if (!value) return '—';
   if (value >= 1_000_000) return `R${(value / 1_000_000).toFixed(1)}M`;
@@ -46,6 +59,14 @@ function CardContent({ opportunity: opp }: { opportunity: Opportunity }) {
         <span className="text-sm font-semibold text-white font-mono">
           {formatCurrency(opp.award_value)}
         </span>
+        {(() => {
+          const badge = fundingLabel(opp.funding_suitability);
+          return badge ? (
+            <span className={`text-[10px] px-1.5 py-0.5 rounded bg-surface-400 font-mono font-bold ${badge.color}`}>
+              {badge.label}
+            </span>
+          ) : null;
+        })()}
         {opp.category && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-400 text-gray-400 uppercase">
             {opp.category.slice(0, 4)}

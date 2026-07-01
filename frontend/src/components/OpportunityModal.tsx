@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X, Building2, Award, Users, FileText, TrendingUp, Shield } from 'lucide-react';
-import { opportunities } from '../services/api';
+import { X, Building2, Award, Users, FileText, TrendingUp, Shield, BarChart3 } from 'lucide-react';
+import { opportunities, buyerRelationships } from '../services/api';
 import type { Opportunity } from '../types';
 
 interface Props {
@@ -18,12 +18,28 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
+  const { data: rel } = useQuery({
+    queryKey: ['buyer-relationship', opp.id],
+    queryFn: async () => {
+      const res = await buyerRelationships.get(opp.id);
+      return res.data;
+    },
+    enabled: true,
+  });
+
   const sufficiencyIcons: Record<string, string> = { sufficient: '✓', role_based: '⚠', none: '✗' };
   const sufficiencyColors: Record<string, string> = {
     sufficient: 'text-emerald-400',
     role_based: 'text-amber-400',
     none: 'text-red-400',
   };
+
+  function relationshipStrength(score: number | null | undefined): { label: string; color: string } {
+    if (score == null) return { label: 'N/A', color: 'text-gray-500' };
+    if (score >= 70) return { label: 'Strong', color: 'text-emerald-400' };
+    if (score >= 40) return { label: 'Medium', color: 'text-amber-400' };
+    return { label: 'Weak', color: 'text-red-400' };
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
@@ -120,6 +136,44 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
             </div>
           </div>
 
+          {/* Buyer Relationship */}
+          <div className="glass rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <BarChart3 className="w-4 h-4 text-primary-400" />
+              <h3 className="text-sm font-semibold text-gray-200">Relationship</h3>
+            </div>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Strength</span>
+                <span className={`font-mono font-bold ${relationshipStrength(rel?.relevance_score).color}`}>
+                  {relationshipStrength(rel?.relevance_score).label}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Awards (12m)</span>
+                <span className="text-gray-200">{rel?.award_count_12m ?? '—'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Total value (12m)</span>
+                <span className="text-gray-200 font-mono">
+                  {rel?.total_award_value_12m != null ? `R${(rel.total_award_value_12m / 1_000_000).toFixed(1)}M` : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Avg response</span>
+                <span className="text-gray-200">
+                  {rel?.avg_response_days != null ? `${rel.avg_response_days.toFixed(1)}d` : '—'}
+                </span>
+              </div>
+              {rel?.win_rate != null && (
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Win rate</span>
+                  <span className="text-gray-200">{(rel.win_rate * 100).toFixed(0)}%</span>
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Scores */}
           <div className="glass rounded-xl p-4">
             <div className="flex items-center gap-2 mb-3">
@@ -129,7 +183,13 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-500">Funding suitability</span>
-                <span className="text-gray-200 font-mono">
+                <span className={`font-mono font-bold ${
+                  opp.funding_suitability != null
+                    ? opp.funding_suitability >= 75 ? 'text-emerald-400'
+                    : opp.funding_suitability >= 50 ? 'text-amber-400'
+                    : 'text-red-400'
+                    : 'text-gray-200'
+                }`}>
                   {opp.funding_suitability != null ? `${opp.funding_suitability}%` : '—'}
                 </span>
               </div>

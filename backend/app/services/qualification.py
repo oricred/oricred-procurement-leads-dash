@@ -22,7 +22,7 @@ class FilterResult:
 
 class FilterHandler(ABC):
     @abstractmethod
-    async def evaluate(self, tender: Tender, rules: list[dict]) -> FilterResult:
+    async def evaluate(self, tender: Tender, rules: list[dict], db: AsyncSession | None = None) -> FilterResult:
         ...
 
 
@@ -66,10 +66,23 @@ class ProvinceFilter(FilterHandler):
 
 
 class EntityTypeFilter(FilterHandler):
-    async def evaluate(self, tender: Tender, rules: list[dict]) -> FilterResult:
+    async def evaluate(self, tender: Tender, rules: list[dict], db: AsyncSession | None = None) -> FilterResult:
+        if not tender.buyer_org_id:
+            return FilterResult(passed=True)
+        org_type = None
+        if db is not None:
+            from app.models.organization import Organization
+            result = await db.execute(select(Organization).where(Organization.id == tender.buyer_org_id))
+            org = result.scalar_one_or_none()
+            if org:
+                org_type = org.organization_type
+        if not org_type:
+            return FilterResult(passed=True)
         for rule in rules:
             if rule.get("type") == "include":
-                pass
+                allowed = rule.get("values", [])
+                if org_type not in allowed:
+                    return FilterResult(passed=False, failed_filter="entity_type", reason=f"Org type '{org_type}' not in {allowed}")
         return FilterResult(passed=True)
 
 
@@ -122,7 +135,7 @@ class QualificationService:
             handler = handlers.get(filter_name)
             if not handler:
                 continue
-            result = await handler.evaluate(tender, filter_def.get("rules", []))
+            result = await handler.evaluate(tender, filter_def.get("rules", []), self.db)
             if not result.passed:
                 logger.info("filter_rejected", filter=filter_name, reason=result.reason, tender_id=tender.api_id)
                 return result
@@ -149,7 +162,7 @@ class QualificationService:
             },
             "entity_type": {
                 "enabled": True,
-                "rules": [{"type": "include", "values": ["national", "provincial", "soe"]}],
+                "rules": [{"type": "include", "values": ["national", "provincial", "soe", "municipal"]}],
             },
             "bee_level": {
                 "enabled": True,

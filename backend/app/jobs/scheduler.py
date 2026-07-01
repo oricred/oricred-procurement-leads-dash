@@ -8,6 +8,7 @@ from app.database import async_session
 from app.jobs.discovery import discover_new_tenders
 from app.jobs.award_check import check_awards_for_watching
 from app.jobs.model_refresh import refresh_timing_model
+from app.jobs.crm_sync import sync_crm
 from app.models.job_run import JobRun
 
 logger = structlog.get_logger()
@@ -58,6 +59,12 @@ def start_scheduler():
         id="refresh_timing_model", name="Refresh award timing model",
     )
 
+    scheduler.add_job(
+        run_job, "cron", hour="*", minute="30",
+        args=["sync_crm", sync_crm],
+        id="sync_crm", name="Sync CRM activity",
+    )
+
     scheduler.start()
-    logger.info("scheduler_started", jobs=["discover_tenders", "check_awards", "refresh_timing_model"])
+    logger.info("scheduler_started", jobs=["discover_tenders", "check_awards", "refresh_timing_model", "sync_crm"])
     return scheduler

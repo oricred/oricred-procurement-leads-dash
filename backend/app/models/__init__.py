@@ -12,6 +12,7 @@ from app.models.alert_log import AlertLog
 from app.models.job_run import JobRun
 from app.models.failed_api_call import FailedApiCall
 from app.models.user import User
+from app.models.buyer_relationship import BuyerRelationship
 
 __all__ = [
     "Tender",
@@ -29,4 +30,5 @@ __all__ = [
     "JobRun",
     "FailedApiCall",
     "User",
+    "BuyerRelationship",
 ]

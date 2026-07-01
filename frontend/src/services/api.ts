@@ -65,3 +65,23 @@ export const admin = {
   updateFilterConfig: (config: Record<string, unknown>) =>
     api.put('/admin/filter-config', config),
 };
+
+export const buyerRelationships = {
+  get: (opportunityId: string) =>
+    api.get<{
+      id: string;
+      company_id: string;
+      organization_id: string;
+      award_count_12m: number;
+      total_award_value_12m: number | null;
+      avg_response_days: number | null;
+      win_rate: number | null;
+      relevance_score: number | null;
+      updated_at: string;
+    } | null>(`/opportunities/${opportunityId}/relationship`),
+};
+
+export const funding = {
+  compute: (opportunityId: string) =>
+    api.post<{ funding_suitability: number }>(`/opportunities/${opportunityId}/compute-funding`),
+};

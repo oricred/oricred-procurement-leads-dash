@@ -5,3 +5,17 @@ build/
 .env.local
 *.log
 .DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+*.db
+
+# TypeScript
+*.tsbuildinfo
+
+# System
+*.service
+nginx.conf
