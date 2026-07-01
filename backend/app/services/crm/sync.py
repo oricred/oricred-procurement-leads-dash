@@ -5,43 +5,41 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session
-from app.config import settings
 from app.models.opportunity import Opportunity
 from app.models.tender import Tender
 from app.models.award import Award
 from app.models.company import Company
 from app.services.crm import CRMAdapter
 from app.services.crm.monday import MondayDotComAdapter
+from app.services.admin_config import get_config
 
 logger = structlog.get_logger()
 
-BOARD_ID = "oricred_opportunities"
-GROUP_ID = "main"
-COLUMN_MAP = {
-    "award_value": "numbers",
-    "buyer_org": "text",
-    "province": "dropdown",
-    "kanban_stage": "status",
-    "assigned_to": "people",
-    "contact_sufficiency": "status",
-    "risk_flag": "status",
-}
 
-
-def _get_adapter() -> CRMAdapter | None:
-    api_key = settings.monday_api_key
+async def _get_adapter(db: AsyncSession) -> CRMAdapter | None:
+    creds = await get_config("admin_credentials", db)
+    api_key = creds.get("monday_api_key", "")
     if not api_key:
         logger.warning("monday_api_key_not_configured")
         return None
     return MondayDotComAdapter(api_key)
 
 
-async def push_opportunity_to_crm(opportunity_id: str) -> None:
-    adapter = _get_adapter()
-    if not adapter:
-        return
+async def _get_board_config(db: AsyncSession) -> tuple[str, str]:
+    creds = await get_config("admin_credentials", db)
+    board_id = creds.get("monday_board_id", "oricred_opportunities")
+    group_id = creds.get("monday_group_id", "main")
+    return board_id, group_id
 
+
+async def push_opportunity_to_crm(opportunity_id: str) -> None:
     async with async_session() as db:
+        adapter = await _get_adapter(db)
+        if not adapter:
+            return
+
+        board_id, group_id = await _get_board_config(db)
+
         result = await db.execute(
             select(Opportunity).where(Opportunity.id == opportunity_id)
         )
@@ -86,8 +84,8 @@ async def push_opportunity_to_crm(opportunity_id: str) -> None:
             logger.info("crm_opportunity_updated", opportunity_id=opportunity_id)
         else:
             item_id = await adapter.create_item(
-                board_id=BOARD_ID,
-                group_id=GROUP_ID,
+                board_id=board_id,
+                group_id=group_id,
                 name=item_name,
                 column_values=column_values,
             )
@@ -97,16 +95,19 @@ async def push_opportunity_to_crm(opportunity_id: str) -> None:
 
 
 async def pull_crm_activity(since: datetime | None = None) -> None:
-    adapter = _get_adapter()
-    if not adapter:
-        return
+    async with async_session() as db:
+        adapter = await _get_adapter(db)
+        if not adapter:
+            return
 
-    if since is None:
-        since = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        board_id, _ = await _get_board_config(db)
 
-    activities = await adapter.get_recent_activity(BOARD_ID, since)
-    logger.info("crm_activity_pulled", count=len(activities))
+        if since is None:
+            since = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    for activity in activities:
-        if activity.event in ("update_column_value", "create_item"):
-            logger.debug("crm_activity_event", event=activity.event, data=activity.data)
+        activities = await adapter.get_recent_activity(board_id, since)
+        logger.info("crm_activity_pulled", count=len(activities))
+
+        for activity in activities:
+            if activity.event in ("update_column_value", "create_item"):
+                logger.debug("crm_activity_event", event=activity.event, data=activity.data)

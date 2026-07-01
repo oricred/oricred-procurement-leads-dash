@@ -77,20 +77,38 @@ function CredentialsTab() {
   if (isLoading) return <p className="text-gray-400">Loading...</p>;
 
   const secrets = ['api_key', 'password', 'secret'];
+  const mondayFields = ['monday_api_key', 'monday_board_id', 'monday_group_id'];
+  const tsaFields = ['tsa_api_key', 'tsa_base_url'];
+  const smtpFields = ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'email_from'];
+
+  function fieldGroup(label: string, keys: string[]) {
+    return (
+      <div className="space-y-3">
+        <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wide">{label}</h3>
+        {keys.map(key => form[key] !== undefined && (
+          <div key={key}>
+            <label className="block text-sm text-gray-300 mb-1">{key}</label>
+            <input
+              type={secrets.some(s => key.includes(s)) ? 'password' : 'text'}
+              value={form[key] as string}
+              onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+              className="w-full bg-surface-300 border border-surface-400 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500"
+            />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <h2 className="text-lg font-semibold text-white mb-4">API Credentials & SMTP</h2>
-      {Object.entries(form).map(([key, value]) => (
-        <div key={key}>
-          <label className="block text-sm text-gray-300 mb-1">{key}</label>
-          <input
-            type={secrets.some(s => key.includes(s)) ? 'password' : 'text'}
-            value={value}
-            onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
-            className="w-full bg-surface-300 border border-surface-400 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500"
-          />
-        </div>
-      ))}
+    <form onSubmit={handleSubmit} className="space-y-6">
+      {fieldGroup('Tenders-SA API', tsaFields)}
+      <div className="border-t border-surface-300 pt-4">
+        {fieldGroup('Monday.com CRM', mondayFields)}
+      </div>
+      <div className="border-t border-surface-300 pt-4">
+        {fieldGroup('SMTP / Email', smtpFields)}
+      </div>
       <div className="flex items-center gap-3">
         <button type="submit" className="btn-primary px-4 py-2 rounded-lg text-sm" disabled={mutation.isPending}>
           {mutation.isPending ? 'Saving...' : 'Save'}

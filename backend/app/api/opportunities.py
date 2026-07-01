@@ -261,10 +261,12 @@ async def get_crm_activity(opportunity_id: str, db: AsyncSession = Depends(get_d
     if not opp:
         raise HTTPException(status_code=404, detail="Opportunity not found")
 
-    from app.config import settings
+    from app.services.admin_config import get_config
     from app.services.crm.monday import MondayDotComAdapter
 
-    api_key = settings.monday_api_key
+    creds = await get_config("admin_credentials", db)
+    api_key = creds.get("monday_api_key", "")
+    board_id = creds.get("monday_board_id", "oricred_opportunities")
     if not api_key:
         return {"activities": []}
 
@@ -272,7 +274,7 @@ async def get_crm_activity(opportunity_id: str, db: AsyncSession = Depends(get_d
     adapter = MondayDotComAdapter(api_key)
 
     try:
-        activities = await adapter.get_recent_activity("oricred_opportunities", today)
+        activities = await adapter.get_recent_activity(board_id, today)
     finally:
         await adapter.close()
 
