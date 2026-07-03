@@ -14,7 +14,7 @@ class Opportunity(Base):
     tender_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     award_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     company_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    kanban_stage: Mapped[str] = mapped_column(String(32), nullable=False, default="new", index=True)
+    kanban_stage: Mapped[str] = mapped_column(String(32), nullable=False, default="new_lead", index=True)
     assigned_to: Mapped[str | None] = mapped_column(String(128), nullable=True)
     contact_sufficiency: Mapped[str | None] = mapped_column(String(16), nullable=True)
     risk_flag: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -39,3 +39,4 @@ class OpportunityAudit(Base):
     to_stage: Mapped[str] = mapped_column(String(32), nullable=False)
     changed_by: Mapped[str] = mapped_column(String(128), nullable=False)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+

@@ -42,8 +42,8 @@ async def compute_relationship(
         .join(Award, Award.id == Opportunity.award_id)
         .where(Opportunity.company_id == company_id)
         .where(Award.buyer_org_id == organization_id)
-        .where(OpportunityAudit.from_stage == "new")
-        .where(OpportunityAudit.to_stage == "contacted")
+        .where(OpportunityAudit.from_stage.in_(("new_lead", "new")))
+        .where(OpportunityAudit.to_stage.in_(("client_contacted", "contacted")))
     )
     avg_response = response_times.scalar()
 
@@ -114,3 +114,4 @@ async def get_relationship(
         )
     )
     return result.scalar_one_or_none()
+

@@ -114,7 +114,7 @@ export default function PipelinePage() {
         ) : (
           <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
             <div className="flex gap-4 overflow-x-auto pb-4 h-[calc(100vh-10rem)]">
-              {STAGES.filter((s) => s !== 'closed').map((stage) => (
+              {STAGES.map((stage) => (
                 <KanbanColumn
                   key={stage}
                   stage={stage}
@@ -143,3 +143,4 @@ export default function PipelinePage() {
     </div>
   );
 }
+

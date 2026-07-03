@@ -13,6 +13,7 @@ from app.models.contact import Contact
 from app.services.crm import CRMAdapter
 from app.services.crm.monday import MondayDotComAdapter
 from app.services.admin_config import get_config
+from app.workflow import WORKFLOW_STAGE_LABELS, normalize_stage
 
 logger = structlog.get_logger()
 
@@ -71,7 +72,8 @@ async def push_opportunity_to_crm(opportunity_id: str) -> None:
                 column_values["text"] = tender.buyer_org_id
             if tender.province:
                 column_values["dropdown"] = tender.province
-        column_values["status"] = opp.kanban_stage.capitalize()
+        stage = normalize_stage(opp.kanban_stage) or opp.kanban_stage
+        column_values["status"] = WORKFLOW_STAGE_LABELS.get(stage, stage.replace("_", " ").title())
         if opp.assigned_to:
             column_values["people"] = opp.assigned_to
         if opp.contact_sufficiency:
@@ -128,3 +130,4 @@ async def pull_crm_activity(since: datetime | None = None) -> None:
         for activity in activities:
             if activity.event in ("update_column_value", "create_item"):
                 logger.debug("crm_activity_event", event=activity.event, data=activity.data)
+

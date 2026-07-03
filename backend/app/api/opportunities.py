@@ -19,6 +19,7 @@ from app.services.buyer_relationship import compute_relationship, get_relationsh
 from app.services.funding_suitability import compute_funding_suitability
 from app.services.buyer_preference import compute_buyer_preference
 from app.services.crm.sync import push_opportunity_to_crm
+from app.workflow import LEGACY_STAGE_MAP, is_workflow_stage, normalize_stage
 
 router = APIRouter()
 
@@ -54,12 +55,12 @@ def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: 
         tender_id=str(opp.tender_id) if opp.tender_id else None,
         award_id=str(opp.award_id) if opp.award_id else None,
         company_id=str(opp.company_id) if opp.company_id else None,
-        company_name=company.name if company else None,
+        company_name=company.name if company else award.supplier_name if award else None,
         award_value=award.amount if award else None,
         buyer_org=tender.buyer_org_id if tender else None,
         province=tender.province if tender else None,
         category=tender.category_id if tender else None,
-        kanban_stage=opp.kanban_stage,
+        kanban_stage=normalize_stage(opp.kanban_stage) or opp.kanban_stage,
         assigned_to=opp.assigned_to,
         contact_sufficiency=opp.contact_sufficiency,
         risk_flag=opp.risk_flag,
@@ -84,7 +85,11 @@ async def list_opportunities(
 ):
     q = select(Opportunity)
     if stage:
-        q = q.where(Opportunity.kanban_stage == stage)
+        stage = normalize_stage(stage)
+        if not is_workflow_stage(stage):
+            raise HTTPException(status_code=400, detail="Invalid opportunity stage")
+        stage_values = [stage] + [legacy for legacy, canonical in LEGACY_STAGE_MAP.items() if canonical == stage]
+        q = q.where(Opportunity.kanban_stage.in_(stage_values))
     if assigned_to:
         q = q.where(Opportunity.assigned_to == assigned_to)
     q = q.order_by(Opportunity.buyer_preference_score.desc().nulls_last(), Opportunity.updated_at.desc())
@@ -154,19 +159,23 @@ async def update_stage(
     if opp.version != body.version:
         raise HTTPException(status_code=409, detail="Version conflict: opportunity was modified")
 
-    old_stage = opp.kanban_stage
-    opp.kanban_stage = body.stage
+    new_stage = normalize_stage(body.stage)
+    if not is_workflow_stage(new_stage):
+        raise HTTPException(status_code=400, detail="Invalid opportunity stage")
+
+    old_stage = normalize_stage(opp.kanban_stage)
+    opp.kanban_stage = new_stage
     opp.version += 1
     opp.updated_at = datetime.now(timezone.utc)
     if body.assigned_to:
         opp.assigned_to = body.assigned_to
-    if body.stage in ("funded", "closed"):
+    if new_stage in ("funded", "lost_lead"):
         opp.closed_at = datetime.now(timezone.utc)
 
     audit = OpportunityAudit(
         opportunity_id=opp.id,
         from_stage=old_stage,
-        to_stage=body.stage,
+        to_stage=new_stage,
         changed_by=body.assigned_to or "system",
     )
     db.add(audit)
@@ -360,3 +369,4 @@ async def get_crm_activity(opportunity_id: str, db: AsyncSession = Depends(get_d
             })
 
     return {"activities": filtered[:20]}
+

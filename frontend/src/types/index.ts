@@ -74,42 +74,70 @@ export interface Opportunity {
 }
 
 export type Stage =
-  | 'new'
-  | 'assigned'
-  | 'contacted'
-  | 'in_discussion'
-  | 'application_received'
-  | 'funded'
-  | 'closed';
+  | 'new_lead'
+  | 'client_contacted'
+  | 'qualified_lead'
+  | 'lost_lead'
+  | 'won_opportunity'
+  | 'credit_preparation'
+  | 'credit_review'
+  | 'conditions_precedent_preapproved'
+  | 'term_sheet_sent'
+  | 'term_sheet_received'
+  | 'contracts_sent'
+  | 'contracts_received'
+  | 'ready_to_rff'
+  | 'funded';
 
 export const STAGES: Stage[] = [
-  'new',
-  'assigned',
-  'contacted',
-  'in_discussion',
-  'application_received',
+  'new_lead',
+  'client_contacted',
+  'qualified_lead',
+  'lost_lead',
+  'won_opportunity',
+  'credit_preparation',
+  'credit_review',
+  'conditions_precedent_preapproved',
+  'term_sheet_sent',
+  'term_sheet_received',
+  'contracts_sent',
+  'contracts_received',
+  'ready_to_rff',
   'funded',
-  'closed',
 ];
 
 export const STAGE_LABELS: Record<Stage, string> = {
-  new: 'New',
-  assigned: 'Assigned',
-  contacted: 'Contacted',
-  in_discussion: 'In Discussion',
-  application_received: 'Application Received',
+  new_lead: 'New Lead',
+  client_contacted: 'Client Contacted',
+  qualified_lead: 'Qualified Lead',
+  lost_lead: 'Lost Lead',
+  won_opportunity: 'Won Opportunity',
+  credit_preparation: 'Credit Prep',
+  credit_review: 'Credit Review',
+  conditions_precedent_preapproved: 'Conditions / Pre-Approved',
+  term_sheet_sent: 'Term Sheet Sent',
+  term_sheet_received: 'Term Sheet Received',
+  contracts_sent: 'Contracts Sent',
+  contracts_received: 'Contracts Received',
+  ready_to_rff: 'Ready to RFF',
   funded: 'Funded',
-  closed: 'Closed',
 };
 
 export const STAGE_COLORS: Record<Stage, string> = {
-  new: 'border-l-blue-500',
-  assigned: 'border-l-yellow-500',
-  contacted: 'border-l-orange-500',
-  in_discussion: 'border-l-purple-500',
-  application_received: 'border-l-pink-500',
+  new_lead: 'border-l-sky-500',
+  client_contacted: 'border-l-blue-500',
+  qualified_lead: 'border-l-violet-500',
+  lost_lead: 'border-l-gray-500',
+  won_opportunity: 'border-l-emerald-500',
+  credit_preparation: 'border-l-amber-500',
+  credit_review: 'border-l-orange-500',
+  conditions_precedent_preapproved: 'border-l-yellow-500',
+  term_sheet_sent: 'border-l-cyan-500',
+  term_sheet_received: 'border-l-teal-500',
+  contracts_sent: 'border-l-indigo-500',
+  contracts_received: 'border-l-purple-500',
+  ready_to_rff: 'border-l-pink-500',
   funded: 'border-l-emerald-500',
-  closed: 'border-l-gray-500',
 };
 
 export interface RadarAward {
@@ -181,3 +209,4 @@ export interface User {
   name: string;
   role: string;
 }
+

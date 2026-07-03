@@ -17,12 +17,13 @@ from app.services.contact_sufficiency import ContactSufficiencyService
 from app.services.email_alert import EmailAlertService
 from app.services.buyer_preference import compute_buyer_preference
 from app.services.crm.sync import push_opportunity_to_crm
+from app.workflow import WORKFLOW_STAGES
 
 logger = structlog.get_logger()
 
 AWARD_FIELDS = [
     "id", "tender_id", "supplier_name", "amount", "award_date",
-    "bee_level", "bee_points",
+    "bee_level", "bee_points", "supplier_canonical_id",
 ]
 
 COMPANY_FIELDS = [
@@ -117,15 +118,22 @@ async def check_awards_for_watching():
                         company = None
                         co_data = company_by_name.get(supplier)
                         if co_data:
-                            company = Company(
+                            company = await db.merge(Company(
                                 api_id=co_data.get("id", supplier),
                                 name=supplier,
                                 bee_level=co_data.get("bbbee_level"),
                                 registration_number=co_data.get("registration_number"),
                                 raw_payload=co_data,
                                 last_refreshed_at=now,
-                            )
-                            db.merge(company)
+                            ))
+                            await db.flush()
+                        elif raw.get("supplier_canonical_id"):
+                            company = await db.merge(Company(
+                                api_id=raw["supplier_canonical_id"],
+                                name=supplier,
+                                raw_payload={"source": "award", "award_id": raw.get("id")},
+                                last_refreshed_at=now,
+                            ))
                             await db.flush()
 
                         # Upsert buyer organization
@@ -181,7 +189,7 @@ async def check_awards_for_watching():
                             tender_id=tender.id,
                             award_id=award.id,
                             company_id=company.id if company else None,
-                            kanban_stage="new",
+                            kanban_stage=WORKFLOW_STAGES[0],
                             contact_sufficiency=cs.label,
                             risk_flag="green",
                         )
@@ -248,3 +256,4 @@ async def check_awards_for_watching():
 
     finally:
         await tsa_db.close()
+
