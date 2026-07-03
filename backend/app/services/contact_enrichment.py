@@ -31,6 +31,8 @@ async def _upsert_contact(
 ) -> bool:
     if not full_name:
         return False
+    if not email and not phone:
+        return False
 
     first_name, last_name = _split_name(full_name)
 
@@ -147,6 +149,63 @@ async def _match_companies_to_tsa(tsa_db: TSADatabase, local_companies: list[Com
     return mapping
 
 
+
+
+async def enrich_company_contacts_by_id(company_id: str, tsa_db: TSADatabase) -> int:
+    """Pull directors and key personnel from TSA DB for one local company."""
+    async with async_session() as db:
+        company = await db.get(Company, company_id)
+        if not company:
+            return 0
+
+    tsa_id = company.api_id
+    if not tsa_id:
+        try:
+            matches = await tsa_db.query_companies(filters={"names": [company.name]}, fields=["id"], limit=1)
+            if matches:
+                tsa_id = matches[0].get("id")
+        except Exception as e:
+            logger.warning("company_contact_match_failed", company=company.name, error=str(e))
+            tsa_id = None
+
+    if not tsa_id:
+        return 0
+
+    added = 0
+    try:
+        directors = await tsa_db.query_directors(company_ids=[tsa_id])
+        for d in directors:
+            if await _upsert_contact(
+                company_id=company.id,
+                organization_id=None,
+                full_name=d.get("full_name", ""),
+                email=d.get("email"),
+                phone=d.get("phone"),
+                job_title="Director",
+                source="tsa_db_enrichment",
+            ):
+                added += 1
+    except Exception as e:
+        logger.warning("director_fetch_failed", company=company.name, error=str(e))
+
+    try:
+        personnel = await tsa_db.query_key_personnel(company_ids=[tsa_id])
+        for p in personnel:
+            if await _upsert_contact(
+                company_id=company.id,
+                organization_id=None,
+                full_name=p.get("full_name", ""),
+                email=p.get("email"),
+                phone=p.get("phone"),
+                job_title=p.get("role") or p.get("department"),
+                source="tsa_db_enrichment",
+            ):
+                added += 1
+    except Exception as e:
+        logger.warning("personnel_fetch_failed", company=company.name, error=str(e))
+
+    return added
+
 async def enrich_company_contacts(tsa_db: TSADatabase) -> int:
     """Pull directors and key personnel from TSA DB for all tracked companies."""
     added = 0
@@ -248,3 +307,5 @@ async def enrich_all_contacts() -> dict[str, int]:
         return {"added": total, "from_companies": company_added, "from_organizations": org_added}
     finally:
         await tsa_db.close()
+
+

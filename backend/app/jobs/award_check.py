@@ -16,6 +16,9 @@ from app.models.past_due import PastDueQueue
 from app.services.contact_sufficiency import ContactSufficiencyService
 from app.services.email_alert import EmailAlertService
 from app.services.buyer_preference import compute_buyer_preference
+from app.services.funding_suitability import compute_funding_suitability
+from app.services.lead_scoring import refresh_lead_scoring
+from app.services.lead_service import retry_contact_lookup_for_opportunity
 from app.services.crm.sync import push_opportunity_to_crm
 from app.workflow import WORKFLOW_STAGES
 
@@ -45,6 +48,7 @@ async def check_awards_for_watching():
     try:
         async with async_session() as db:
             now = datetime.now(timezone.utc)
+            new_opportunity_ids: list[str] = []
 
             # Load all watching watchlist items with their tenders
             result = await db.execute(
@@ -163,40 +167,50 @@ async def check_awards_for_watching():
                             except Exception:
                                 pass
 
-                        # Create award record
-                        award = Award(
-                            api_id=raw.get("id"),
-                            tender_id=tender.id,
-                            raw_payload=raw,
-                            supplier_name=supplier,
-                            supplier_company_id=company.api_id if company else None,
-                            amount=raw.get("amount"),
-                            award_date=raw.get("award_date"),
-                            bee_level=raw.get("bee_level"),
-                            bee_points=raw.get("bee_points"),
-                            buyer_org_id=tender.buyer_org_id,
-                            source="tenders_api",
-                            discovered_at=now,
-                        )
-                        db.add(award)
-                        await db.flush()
+                        # Create or reuse award record
+                        award = None
+                        if raw.get("id"):
+                            existing_award = await db.execute(select(Award).where(Award.api_id == raw.get("id")))
+                            award = existing_award.scalar_one_or_none()
+                        if not award:
+                            award = Award(
+                                api_id=raw.get("id"),
+                                tender_id=tender.id,
+                                raw_payload=raw,
+                                supplier_name=supplier,
+                                supplier_company_id=company.api_id if company else None,
+                                amount=raw.get("amount"),
+                                award_date=raw.get("award_date"),
+                                bee_level=raw.get("bee_level"),
+                                bee_points=raw.get("bee_points"),
+                                buyer_org_id=tender.buyer_org_id,
+                                source="tenders_api",
+                                discovered_at=now,
+                            )
+                            db.add(award)
+                            await db.flush()
 
-                        # Classify contact sufficiency
-                        cs = ContactSufficiencyService.classify(org)
+                        existing_opp = await db.execute(select(Opportunity).where(Opportunity.award_id == award.id))
+                        if existing_opp.scalar_one_or_none():
+                            continue
 
-                        # Create opportunity
+                        # Create lead opportunity
                         opp = Opportunity(
                             tender_id=tender.id,
                             award_id=award.id,
                             company_id=company.id if company else None,
                             kanban_stage=WORKFLOW_STAGES[0],
-                            contact_sufficiency=cs.label,
+                            contact_sufficiency="none",
                             risk_flag="green",
                         )
                         db.add(opp)
                         await db.flush()
 
                         opp.buyer_preference_score = await compute_buyer_preference(str(opp.id), db)
+                        if company:
+                            opp.funding_suitability = await compute_funding_suitability(company.id, db)
+                        await refresh_lead_scoring(opp, db, tender=tender, award=award, company=company, contacts=[])
+                        new_opportunity_ids.append(str(opp.id))
 
                         # Build related bidders from TSA DB bidders
                         related = []
@@ -221,7 +235,6 @@ async def check_awards_for_watching():
                             dashboard_url="/opportunities/" + str(opp.id),
                         )
 
-                        await push_opportunity_to_crm(str(opp.id))
 
                     wl.status = "awarded"
                     wl.awarded_at = now
@@ -252,8 +265,18 @@ async def check_awards_for_watching():
                             )
 
             await db.commit()
-            logger.info("award_check_complete", checked=len(rows), awards_found=len(raw_awards))
+
+            for opp_id in new_opportunity_ids:
+                try:
+                    async with async_session() as lookup_db:
+                        await retry_contact_lookup_for_opportunity(opp_id, lookup_db, tsa_db)
+                    await push_opportunity_to_crm(opp_id)
+                except Exception as e:
+                    logger.warning("lead_post_create_sync_failed", opportunity_id=opp_id, error=str(e))
+
+            logger.info("award_check_complete", checked=len(rows), awards_found=len(raw_awards), leads_created=len(new_opportunity_ids))
 
     finally:
         await tsa_db.close()
+
 

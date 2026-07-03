@@ -64,6 +64,15 @@ export interface Opportunity {
   win_probability: number | null;
   funding_suitability: number | null;
   buyer_preference_score: number | null;
+  lead_priority_score: number | null;
+  lead_priority_reasons: string[];
+  next_action: string | null;
+  last_contact_lookup_at: string | null;
+  contacted_at: string | null;
+  primary_contact: Contact | null;
+  source_tender_title: string | null;
+  source_award_date: string | null;
+  source_award_value: number | null;
   related_bidders: { name: string; inferred: boolean; company_id?: string; resolved?: string; reason?: string }[] | null;
   contacts: Contact[];
   days_since_award: number | null;
@@ -209,4 +218,5 @@ export interface User {
   name: string;
   role: string;
 }
+
 

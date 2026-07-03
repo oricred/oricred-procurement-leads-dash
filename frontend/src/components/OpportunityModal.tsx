@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, Building2, Award, Users, FileText, TrendingUp, BarChart3, Activity, History, Edit2, Phone, Mail, Linkedin, Star, Plus, Trash2 } from 'lucide-react';
+import { X, Building2, Award, Users, FileText, TrendingUp, BarChart3, Activity, History, Edit2, Phone, Mail, Linkedin, Star, Plus, Trash2, RefreshCcw, CheckCircle2 } from 'lucide-react';
 import { opportunities, buyerRelationships, crmActivity, contacts as contactsApi } from '../services/api';
 import type { Opportunity, Contact } from '../types';
 
@@ -91,6 +91,27 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
     },
   });
 
+
+  const findContactMutation = useMutation({
+    mutationFn: () => opportunities.findContact(opp.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      queryClient.invalidateQueries({ queryKey: ['opportunities'] });
+    },
+  });
+
+  const markContactedMutation = useMutation({
+    mutationFn: () => opportunities.markContacted(opp.id, {
+      version: opp.version,
+      contact_id: opp.primary_contact?.id,
+      changed_by: 'user',
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      queryClient.invalidateQueries({ queryKey: ['opportunities'] });
+      queryClient.invalidateQueries({ queryKey: ['opportunity-audit', opp.id] });
+    },
+  });
   const updateMutation = useMutation({
     mutationFn: (body: { notes?: string; risk_flag?: string }) => opportunities.update(opp.id, body),
     onSuccess: () => {
@@ -129,33 +150,59 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
               )}
             </div>
           </div>
-          <button onClick={onClose} className="p-1 hover:bg-surface-300 rounded-lg transition-colors">
-            <X className="w-5 h-5 text-gray-400" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => findContactMutation.mutate()}
+              disabled={findContactMutation.isPending}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded bg-surface-300 text-gray-300 hover:text-white hover:bg-surface-400 transition-colors disabled:opacity-50"
+            >
+              <RefreshCcw className="w-3.5 h-3.5" />
+              Find Contact
+            </button>
+            <button
+              onClick={() => markContactedMutation.mutate()}
+              disabled={markContactedMutation.isPending || opp.kanban_stage === 'client_contacted'}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded bg-primary-600 text-white hover:bg-primary-500 transition-colors disabled:opacity-50"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              Mark Contacted
+            </button>
+            <button onClick={onClose} className="p-1 hover:bg-surface-300 rounded-lg transition-colors">
+              <X className="w-5 h-5 text-gray-400" />
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Award Detail */}
-          <div className="glass rounded-xl p-4">
+          <div className="glass rounded-xl p-4 md:col-span-2">
             <div className="flex items-center gap-2 mb-3">
               <Award className="w-4 h-4 text-primary-400" />
               <h3 className="text-sm font-semibold text-gray-200">Award Detail</h3>
             </div>
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-gray-500">Value</span>
-                <span className="text-white font-mono font-medium">
-                  {opp.award_value ? `R${(opp.award_value / 1_000).toFixed(0)}K` : '—'}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+              <div>
+                <span className="block text-gray-500 text-xs mb-1">Value</span>
+                <span className="text-white font-mono font-semibold">
+                  {(opp.source_award_value ?? opp.award_value) ? `R${(((opp.source_award_value ?? opp.award_value) as number) / 1_000).toFixed(0)}K` : '—'}
                 </span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Buyer</span>
+              <div>
+                <span className="block text-gray-500 text-xs mb-1">Award date</span>
+                <span className="text-gray-200">{opp.source_award_date ? new Date(opp.source_award_date).toLocaleDateString() : '—'}</span>
+              </div>
+              <div>
+                <span className="block text-gray-500 text-xs mb-1">Buyer</span>
                 <span className="text-gray-200">{opp.buyer_org ?? '—'}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Days since award</span>
+              <div>
+                <span className="block text-gray-500 text-xs mb-1">Days since award</span>
                 <span className="text-gray-200">{opp.days_since_award ?? '—'}d</span>
               </div>
+            </div>
+            <div className="mt-3 pt-3 border-t border-surface-300 text-sm">
+              <span className="block text-gray-500 text-xs mb-1">Tender</span>
+              <span className="text-gray-200">{opp.source_tender_title ?? '—'}</span>
             </div>
           </div>
 
@@ -557,3 +604,4 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
     </div>
   );
 }
+

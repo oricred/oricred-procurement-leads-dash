@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { TrendingUp, Columns, Eye, LogOut, Activity, Shield, Clock, Award, FileText } from 'lucide-react';
+import { TrendingUp, Columns, Eye, LogOut, Activity, Shield, Clock, Award, FileText, UsersRound } from 'lucide-react';
 import { auth, dashboard } from '../services/api';
 import { useState } from 'react';
 
@@ -44,13 +44,14 @@ export default function Layout() {
             </div>
             <div>
               <h1 className="text-lg font-bold text-white">Oricred</h1>
-              <p className="text-xs text-gray-500">Procurement Intel</p>
+              <p className="text-xs text-gray-500">Lead Intelligence</p>
             </div>
           </div>
         </div>
 
         <nav className="flex-1 p-3 space-y-1">
           {[
+            { path: '/leads', label: 'Leads', icon: UsersRound },
             { path: '/pipeline', label: 'Pipeline', icon: Columns },
             { path: '/matching', label: 'Matching', icon: Eye },
             { path: '/awards', label: 'Awards', icon: Award },
@@ -104,7 +105,7 @@ export default function Layout() {
           <div className="flex items-center gap-4 text-sm">
             {stats && (
               <>
-                <span className="text-gray-400">{stats.total_opportunities} opportunities</span>
+                <span className="text-gray-400">{stats.total_opportunities} leads</span>
                 {stats.past_due_count > 0 && (
                   <span className="badge-red text-xs px-2 py-0.5 rounded-full">
                     {stats.past_due_count} past due
@@ -122,3 +123,4 @@ export default function Layout() {
     </div>
   );
 }
+

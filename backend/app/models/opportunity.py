@@ -21,6 +21,11 @@ class Opportunity(Base):
     win_probability: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
     funding_suitability: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
     buyer_preference_score: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    lead_priority_score: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True, index=True)
+    lead_priority_reasons = Column(JSON, nullable=True)
+    next_action: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_contact_lookup_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    contacted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     related_bidders = Column(JSON, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -39,4 +44,5 @@ class OpportunityAudit(Base):
     to_stage: Mapped[str] = mapped_column(String(32), nullable=False)
     changed_by: Mapped[str] = mapped_column(String(128), nullable=False)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
 

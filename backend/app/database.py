@@ -33,6 +33,11 @@ _migration_sql = """
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS buyer_preference_score NUMERIC(5,2);
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS related_bidders JSON;
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS crm_item_id VARCHAR(64);
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS lead_priority_score NUMERIC(5,2);
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS lead_priority_reasons JSON;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS next_action VARCHAR(64);
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS last_contact_lookup_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS contacted_at TIMESTAMP WITH TIME ZONE;
 CREATE TABLE IF NOT EXISTS contacts (
     id VARCHAR(36) PRIMARY KEY,
     company_id VARCHAR(36),
@@ -65,3 +70,4 @@ async def _run_migrations():
             logger.info("migrations_complete")
     except Exception as e:
         logger.warning("migrations_skipped", error=str(e))
+

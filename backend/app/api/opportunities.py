@@ -12,13 +12,15 @@ from app.models.tender import Tender
 from app.models.company import Company
 from app.models.organization import Organization
 from app.models.contact import Contact
-from app.schemas.opportunity import OpportunityRead, OpportunityStageUpdate, OpportunityUpdate, OpportunityList, AuditEntry
+from app.schemas.opportunity import OpportunityRead, OpportunityStageUpdate, OpportunityUpdate, OpportunityList, AuditEntry, OpportunityContactedUpdate
 from app.schemas.contact import ContactRead
 from app.schemas.buyer_relationship import BuyerRelationshipRead
 from app.services.buyer_relationship import compute_relationship, get_relationship
 from app.services.funding_suitability import compute_funding_suitability
 from app.services.buyer_preference import compute_buyer_preference
 from app.services.crm.sync import push_opportunity_to_crm
+from app.services.lead_scoring import choose_primary_contact, refresh_lead_scoring
+from app.services.lead_service import mark_opportunity_contacted, retry_contact_lookup_for_opportunity
 from app.workflow import LEGACY_STAGE_MAP, is_workflow_stage, normalize_stage
 
 router = APIRouter()
@@ -67,6 +69,15 @@ def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: 
         win_probability=opp.win_probability,
         funding_suitability=opp.funding_suitability,
         buyer_preference_score=opp.buyer_preference_score,
+        lead_priority_score=opp.lead_priority_score,
+        lead_priority_reasons=opp.lead_priority_reasons or [],
+        next_action=opp.next_action,
+        last_contact_lookup_at=opp.last_contact_lookup_at,
+        contacted_at=opp.contacted_at,
+        primary_contact=ContactRead.model_validate(choose_primary_contact([c for c in contacts or [] if c.company_id])) if choose_primary_contact([c for c in contacts or [] if c.company_id]) else None,
+        source_tender_title=tender.title if tender else None,
+        source_award_date=award.award_date if award else None,
+        source_award_value=award.amount if award else None,
         related_bidders=opp.related_bidders,
         contacts=contacts or [],
         days_since_award=days_since,
@@ -92,7 +103,7 @@ async def list_opportunities(
         q = q.where(Opportunity.kanban_stage.in_(stage_values))
     if assigned_to:
         q = q.where(Opportunity.assigned_to == assigned_to)
-    q = q.order_by(Opportunity.buyer_preference_score.desc().nulls_last(), Opportunity.updated_at.desc())
+    q = q.order_by(Opportunity.lead_priority_score.desc().nulls_last(), Opportunity.buyer_preference_score.desc().nulls_last(), Opportunity.updated_at.desc())
 
     result = await db.execute(q)
     opportunities = result.scalars().all()
@@ -184,8 +195,47 @@ async def update_stage(
 
     await push_opportunity_to_crm(opportunity_id)
 
-    return _opportunity_to_read(opp)
+    return await _read_opportunity_with_context(opp, db)
 
+
+async def _read_opportunity_with_context(opp: Opportunity, db: AsyncSession) -> OpportunityRead:
+    tender = await db.get(Tender, opp.tender_id) if opp.tender_id else None
+    award = await db.get(Award, opp.award_id) if opp.award_id else None
+    company = await db.get(Company, opp.company_id) if opp.company_id else None
+    contacts = await _load_opportunity_contacts(opp, db)
+    return _opportunity_to_read(opp, tender, award, company, contacts)
+
+
+@router.post("/{opportunity_id}/find-contact", response_model=OpportunityRead)
+async def find_opportunity_contact(opportunity_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        opp, _added = await retry_contact_lookup_for_opportunity(opportunity_id, db)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+    return await _read_opportunity_with_context(opp, db)
+
+
+@router.post("/{opportunity_id}/mark-contacted", response_model=OpportunityRead)
+async def mark_contacted(
+    opportunity_id: str,
+    body: OpportunityContactedUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        opp = await mark_opportunity_contacted(
+            opportunity_id=opportunity_id,
+            version=body.version,
+            db=db,
+            contact_id=body.contact_id,
+            note=body.note,
+            changed_by=body.changed_by or "system",
+        )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    await push_opportunity_to_crm(opportunity_id)
+    return await _read_opportunity_with_context(opp, db)
 
 @router.patch("/{opportunity_id}/assign")
 async def assign_opportunity(opportunity_id: str, assignee: str, db: AsyncSession = Depends(get_db)):
@@ -220,7 +270,7 @@ async def update_opportunity(opportunity_id: str, body: OpportunityUpdate, db: A
     opp.version += 1
     await db.commit()
     await db.refresh(opp)
-    return _opportunity_to_read(opp)
+    return await _read_opportunity_with_context(opp, db)
 
 
 @router.get("/{opportunity_id}/audit", response_model=list[AuditEntry])
@@ -369,4 +419,6 @@ async def get_crm_activity(opportunity_id: str, db: AsyncSession = Depends(get_d
             })
 
     return {"activities": filtered[:20]}
+
+
 

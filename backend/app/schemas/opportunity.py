@@ -23,6 +23,15 @@ class OpportunityRead(BaseModel):
     win_probability: Decimal | None = None
     funding_suitability: Decimal | None = None
     buyer_preference_score: Decimal | None = None
+    lead_priority_score: Decimal | None = None
+    lead_priority_reasons: list[str] = []
+    next_action: str | None = None
+    last_contact_lookup_at: datetime | None = None
+    contacted_at: datetime | None = None
+    primary_contact: ContactRead | None = None
+    source_tender_title: str | None = None
+    source_award_date: datetime | None = None
+    source_award_value: Decimal | None = None
     days_since_award: int | None = None
     related_bidders: list[dict] | None = None
     contacts: list[ContactRead] = []
@@ -60,6 +69,14 @@ class OpportunityStageUpdate(BaseModel):
     version: int
 
 
+class OpportunityContactedUpdate(BaseModel):
+    version: int
+    contact_id: str | None = None
+    note: str | None = None
+    changed_by: str | None = None
+
+
 class OpportunityList(BaseModel):
     items: list[OpportunityRead]
     total: int
+

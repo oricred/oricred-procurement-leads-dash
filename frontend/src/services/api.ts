@@ -48,10 +48,19 @@ export const opportunities = {
     api.patch(`/opportunities/${id}/assign`, null, { params: { assignee } }),
   update: (id: string, body: { notes?: string; risk_flag?: string }) =>
     api.patch<Opportunity>(`/opportunities/${id}`, body),
+  findContact: (id: string) =>
+    api.post<Opportunity>(`/opportunities/${id}/find-contact`),
+  markContacted: (id: string, body: { version: number; contact_id?: string; note?: string; changed_by?: string }) =>
+    api.post<Opportunity>(`/opportunities/${id}/mark-contacted`, body),
   getAudit: (id: string) =>
     api.get<AuditEntry[]>(`/opportunities/${id}/audit`),
 };
 
+
+export const leads = {
+  list: (params?: Record<string, unknown>) =>
+    api.get<{ items: Opportunity[]; total: number }>('/leads', { params }),
+};
 export const radar = {
   get: () => api.get<RadarData>('/radar'),
 };
@@ -177,3 +186,4 @@ export const crmActivity = {
       `/opportunities/${opportunityId}/crm-activity`
     ),
 };
+

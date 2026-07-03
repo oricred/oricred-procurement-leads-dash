@@ -3,6 +3,7 @@ from app.schemas.opportunity import (
     OpportunityCreate,
     OpportunityUpdate,
     OpportunityStageUpdate,
+    OpportunityContactedUpdate,
     OpportunityList,
 )
 from app.schemas.radar import RadarAward, RadarData
@@ -16,6 +17,7 @@ __all__ = [
     "OpportunityCreate",
     "OpportunityUpdate",
     "OpportunityStageUpdate",
+    "OpportunityContactedUpdate",
     "OpportunityList",
     "RadarAward",
     "RadarData",
@@ -30,3 +32,4 @@ __all__ = [
     "ContactCreate",
     "ContactUpdate",
 ]
+

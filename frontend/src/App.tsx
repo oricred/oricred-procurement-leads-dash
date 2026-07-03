@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import Layout from './components/Layout';
+import LeadsPage from './pages/LeadsPage';
 import PipelinePage from './pages/PipelinePage';
 import MatchingPage from './pages/MatchingPage';
 import AwardsPage from './pages/AwardsPage';
@@ -49,7 +50,8 @@ export default function App() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Navigate to="/pipeline" replace />} />
+        <Route index element={<Navigate to="/leads" replace />} />
+        <Route path="leads" element={<LeadsPage />} />
         <Route path="pipeline" element={<PipelinePage />} />
         <Route path="matching" element={<MatchingPage />} />
         <Route path="awards" element={<AwardsPage />} />
@@ -60,3 +62,4 @@ export default function App() {
     </Routes>
   );
 }
+
