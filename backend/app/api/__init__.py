@@ -11,6 +11,7 @@ from app.api.past_due import router as past_due_router
 from app.api.contacts import router as contacts_router
 from app.api.awards import router as awards_router
 from app.api.tenders import router as tenders_router
+from app.api.historical_contacts import router as historical_contacts_router
 from app.api.organizations import router as org_router
 from app.api.categories import router as cat_router
 
@@ -26,6 +27,7 @@ router.include_router(past_due_router, prefix="/past-due", tags=["past-due"])
 router.include_router(contacts_router, tags=["contacts"])
 router.include_router(awards_router, tags=["awards"])
 router.include_router(tenders_router, tags=["tenders"])
+router.include_router(historical_contacts_router)
 router.include_router(org_router, tags=["organizations"])
 router.include_router(cat_router, tags=["categories"])
 
@@ -33,4 +35,3 @@ router.include_router(cat_router, tags=["categories"])
 @router.get("/health")
 async def health():
     return {"status": "ok"}
-

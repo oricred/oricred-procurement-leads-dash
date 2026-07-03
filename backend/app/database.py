@@ -57,7 +57,23 @@ CREATE TABLE IF NOT EXISTS contacts (
     UNIQUE(company_id, email),
     UNIQUE(organization_id, email)
 );
-"""
+CREATE TABLE IF NOT EXISTS historical_contacts (
+    id VARCHAR(36) PRIMARY KEY,
+    company_id VARCHAR(36) NOT NULL UNIQUE,
+    first_award_date TIMESTAMP WITH TIME ZONE,
+    last_award_date TIMESTAMP WITH TIME ZONE,
+    total_award_count INTEGER NOT NULL DEFAULT 0,
+    total_award_value NUMERIC(15,2),
+    last_award_id VARCHAR(64),
+    award_ids JSON NOT NULL DEFAULT '[]',
+    source VARCHAR(32) NOT NULL DEFAULT 'tenders_api',
+    last_synced_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+ALTER TABLE historical_contacts ADD COLUMN IF NOT EXISTS award_ids JSON NOT NULL DEFAULT '[]';
+CREATE INDEX IF NOT EXISTS idx_historical_contacts_company_id ON historical_contacts(company_id);
+CREATE INDEX IF NOT EXISTS idx_historical_contacts_last_award_date ON historical_contacts(last_award_date);"""
 
 
 async def _run_migrations():
@@ -70,4 +86,7 @@ async def _run_migrations():
             logger.info("migrations_complete")
     except Exception as e:
         logger.warning("migrations_skipped", error=str(e))
+
+
+
 

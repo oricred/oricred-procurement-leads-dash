@@ -7,6 +7,7 @@ import PipelinePage from './pages/PipelinePage';
 import MatchingPage from './pages/MatchingPage';
 import AwardsPage from './pages/AwardsPage';
 import TendersPage from './pages/TendersPage';
+import HistoricalContactsPage from './pages/HistoricalContactsPage';
 import AdminPage from './pages/AdminPage';
 import PastDuePage from './pages/PastDuePage';
 import LoginPage from './pages/LoginPage';
@@ -56,10 +57,13 @@ export default function App() {
         <Route path="matching" element={<MatchingPage />} />
         <Route path="awards" element={<AwardsPage />} />
         <Route path="tenders" element={<TendersPage />} />
+        <Route path="historical-contacts" element={<HistoricalContactsPage />} />
         <Route path="past-due" element={<PastDuePage />} />
         <Route path="admin" element={<AdminPage />} />
       </Route>
     </Routes>
   );
 }
+
+
 

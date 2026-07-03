@@ -175,6 +175,7 @@ async def trigger_job(job_name: str, db: AsyncSession = Depends(get_db), current
         "check_awards": "app.jobs.award_check:check_awards_for_watching",
         "refresh_timing_model": "app.jobs.model_refresh:refresh_timing_model",
         "sync_crm": "app.jobs.crm_sync:sync_crm",
+        "historical_contacts": "app.jobs.historical_contacts:sync_historical_contacts_job",
     }
     import_path = handlers.get(job_name)
     if not import_path:
@@ -311,3 +312,5 @@ async def retry_failed_api_call(call_id: str, db: AsyncSession = Depends(get_db)
         )
     finally:
         await client.close()
+
+

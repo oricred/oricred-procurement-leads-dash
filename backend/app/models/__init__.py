@@ -14,6 +14,7 @@ from app.models.failed_api_call import FailedApiCall
 from app.models.user import User
 from app.models.buyer_relationship import BuyerRelationship
 from app.models.contact import Contact
+from app.models.historical_contact import HistoricalContact
 
 __all__ = [
     "Tender",
@@ -33,4 +34,6 @@ __all__ = [
     "User",
     "BuyerRelationship",
     "Contact",
+    "HistoricalContact",
 ]
+

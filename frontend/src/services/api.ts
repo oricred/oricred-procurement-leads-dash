@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Opportunity, Stage, RadarData, WatchlistItem, DashboardStats, User, AuditEntry, PastDueEntry, Contact, AwardItem, TenderItem } from '../types';
+import type { Opportunity, Stage, RadarData, WatchlistItem, DashboardStats, User, AuditEntry, PastDueEntry, Contact, AwardItem, TenderItem, HistoricalContact } from '../types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -156,6 +156,11 @@ export const contacts = {
   delete: (contactId: string) => api.delete(`/contacts/${contactId}`),
 };
 
+export const historicalContactsApi = {
+  list: (params?: Record<string, unknown>) =>
+    api.get<{ items: HistoricalContact[]; total: number }>('/historical-contacts', { params }),
+};
+
 export const awardsApi = {
   list: (params: Record<string, unknown>) =>
     api.get<{ items: AwardItem[]; total: number; page: number; page_size: number }>('/awards', { params }),
@@ -186,4 +191,5 @@ export const crmActivity = {
       `/opportunities/${opportunityId}/crm-activity`
     ),
 };
+
 

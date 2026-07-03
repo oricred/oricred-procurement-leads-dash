@@ -81,9 +81,10 @@ DEFAULT_SCORING = {
 
 DEFAULT_JOBS = {
     "discover_tenders": {"enabled": True, "cron": "*/15 * * * *", "description": "Poll Tenders-SA for new tenders"},
-    "check_awards": {"enabled": True, "cron": "0 * * * *", "description": "Check awards for watching tenders"},
+    "check_awards": {"enabled": True, "cron": "*/30 * * * *", "description": "Check awards for watching tenders"},
     "refresh_timing_model": {"enabled": True, "cron": "0 2 * * 0", "description": "Recompute award-timing model"},
     "sync_crm": {"enabled": True, "cron": "30 * * * *", "description": "Sync CRM activity from Monday.com"},
+    "historical_contacts": {"enabled": True, "cron": "30 2 * * *", "description": "Import historical awarded companies and contacts"},
 }
 
 CONFIG_DEFAULTS: dict[str, tuple[dict, str]] = {
@@ -139,3 +140,5 @@ async def get_all_configs(db: AsyncSession) -> dict:
             defaults, _ = CONFIG_DEFAULTS.get(key, ({}, ""))
             configs[key] = dict(defaults)
     return configs
+
+

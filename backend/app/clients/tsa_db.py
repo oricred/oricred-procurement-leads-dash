@@ -243,6 +243,11 @@ def _build_award_where(filters: dict[str, Any] | None) -> tuple[str, dict[str, A
         clauses.append("a.award_date >= :since")
         params["since"] = since
 
+    until = filters.get("until") or filters.get("before")
+    if until:
+        clauses.append("a.award_date < :until")
+        params["until"] = until
+
     value_min = filters.get("value_min")
     if value_min is not None:
         clauses.append("a.amount >= :value_min")
@@ -254,17 +259,32 @@ def _build_award_where(filters: dict[str, Any] | None) -> tuple[str, dict[str, A
         params["value_max"] = float(value_max)
 
     buyer_org_id = filters.get("buyer_org_id")
-    if buyer_org_id:
+    category_ids = filters.get("category_ids") or filters.get("category")
+    provinces = filters.get("provinces") or filters.get("province")
+
+    if buyer_org_id or category_ids or provinces:
         join_clause = "JOIN tenders t ON t.id = a.tender_id"
+        if category_ids:
+            join_clause += " LEFT JOIN tender_category_relations tcr ON tcr.tender_id = t.id LEFT JOIN tender_categories tc ON tc.id = tcr.category_id"
+
+    if buyer_org_id:
         clauses.append("t.source_organization_id = :buyer_org_id")
         params["buyer_org_id"] = buyer_org_id
+
+    if category_ids:
+        values = category_ids if isinstance(category_ids, list) else [category_ids]
+        clauses.append("LOWER(tc.canonical_name) = ANY(:category_ids)")
+        params["category_ids"] = [str(v).lower() for v in values]
+
+    if provinces:
+        values = provinces if isinstance(provinces, list) else [provinces]
+        clauses.append("LOWER(t.province) = ANY(:provinces)")
+        params["provinces"] = [str(v).lower() for v in values]
 
     where = " AND ".join(clauses)
     if where:
         where = "WHERE " + where
     return where, params, join_clause
-
-
 def _build_company_where(filters: dict[str, Any] | None) -> tuple[str, dict[str, Any]]:
     if not filters:
         return "", {}
@@ -653,3 +673,6 @@ class TSADatabase:
             result = await session.execute(text(sql))
             rows = result.mappings().all()
             return [dict(row) for row in rows]
+
+
+

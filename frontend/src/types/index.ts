@@ -47,6 +47,23 @@ export interface Contact {
   updated_at: string;
 }
 
+export interface HistoricalContact {
+  id: string;
+  company_id: string;
+  company_name: string;
+  registration_number: string | null;
+  bee_level: number | null;
+  first_award_date: string | null;
+  last_award_date: string | null;
+  total_award_count: number;
+  total_award_value: number | null;
+  last_award_id: string | null;
+  contact_sufficiency: 'sufficient' | 'role_based' | 'none';
+  primary_contact: Contact | null;
+  contacts: Contact[];
+  source: string;
+  last_synced_at: string;
+}
 export interface Opportunity {
   id: string;
   tender_id: string | null;
@@ -218,5 +235,6 @@ export interface User {
   name: string;
   role: string;
 }
+
 
 

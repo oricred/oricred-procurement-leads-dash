@@ -1,4 +1,3 @@
-import asyncio
 from datetime import datetime, timezone
 
 import structlog
@@ -10,6 +9,7 @@ from app.jobs.award_check import check_awards_for_watching
 from app.jobs.model_refresh import refresh_timing_model
 from app.jobs.crm_sync import sync_crm
 from app.jobs.contact_enrichment import run_contact_enrichment
+from app.jobs.historical_contacts import sync_historical_contacts_job
 from app.models.job_run import JobRun
 
 logger = structlog.get_logger()
@@ -50,7 +50,7 @@ def start_scheduler():
         id="discover_tenders", name="Discover new tenders",
     )
     scheduler.add_job(
-        run_job, "cron", minute="0",
+        run_job, "cron", minute="*/30",
         args=["check_awards", check_awards_for_watching],
         id="check_awards", name="Check awards for watching tenders",
     )
@@ -72,6 +72,15 @@ def start_scheduler():
         id="contact_enrichment", name="Enrich contacts from TSA DB",
     )
 
+    scheduler.add_job(
+        run_job, "cron", hour="2", minute="30",
+        args=["historical_contacts", sync_historical_contacts_job],
+        id="historical_contacts", name="Sync historical awarded companies",
+    )
+
     scheduler.start()
-    logger.info("scheduler_started", jobs=["discover_tenders", "check_awards", "refresh_timing_model", "sync_crm", "contact_enrichment"])
+    logger.info(
+        "scheduler_started",
+        jobs=["discover_tenders", "check_awards", "refresh_timing_model", "sync_crm", "contact_enrichment", "historical_contacts"],
+    )
     return scheduler
