@@ -1,12 +1,24 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { TrendingUp, Columns, LogOut, Activity, Shield, Search, UsersRound, BookOpen } from 'lucide-react';
+import { TrendingUp, Columns, LogOut, Activity, Shield, Search, UsersRound, BookOpen, WifiOff } from 'lucide-react';
 import { auth, dashboard } from '../services/api';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 export default function Layout() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [online, setOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const goOnline = () => setOnline(true);
+    const goOffline = () => setOnline(false);
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => {
+      window.removeEventListener('online', goOnline);
+      window.removeEventListener('offline', goOffline);
+    };
+  }, []);
 
   const { data: user } = useQuery({
     queryKey: ['me'],
@@ -113,6 +125,12 @@ export default function Layout() {
           </div>
         </header>
 
+        {!online && (
+          <div className="flex items-center gap-2 px-6 py-2 bg-amber-500/10 border-b border-amber-500/20 text-amber-400 text-xs font-medium">
+            <WifiOff className="w-3.5 h-3.5" />
+            You are offline — showing cached data
+          </div>
+        )}
         <div className="flex-1 overflow-auto p-6">
           <Outlet />
         </div>
