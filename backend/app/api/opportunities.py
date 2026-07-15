@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +25,8 @@ from app.services.crm.sync import push_opportunity_to_crm
 from app.services.lead_scoring import choose_primary_contact, refresh_lead_scoring
 from app.services.lead_service import mark_opportunity_contacted, retry_contact_lookup_for_opportunity
 from app.workflow import LEGACY_STAGE_MAP, WORKFLOW_NEXT, is_workflow_stage, normalize_stage
+
+logger = structlog.get_logger()
 
 router = APIRouter()
 
@@ -202,7 +205,10 @@ async def transition_opportunity(
     db.add(OpportunityAudit(opportunity_id=opp.id, from_stage=old_stage, to_stage=new_stage, changed_by=current_user["name"]))
     await db.commit()
     await db.refresh(opp)
-    await push_opportunity_to_crm(opportunity_id)
+    try:
+        await push_opportunity_to_crm(opportunity_id)
+    except Exception:
+        logger.exception("crm_push_failed", opportunity_id=opportunity_id)
     return await _read_opportunity_with_context(opp, db)
 
 @router.get("/{opportunity_id}", response_model=OpportunityRead)
@@ -326,7 +332,10 @@ async def mark_contacted(
         raise HTTPException(status_code=404, detail="Opportunity not found")
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    await push_opportunity_to_crm(opportunity_id)
+    try:
+        await push_opportunity_to_crm(opportunity_id)
+    except Exception:
+        logger.exception("crm_push_failed", opportunity_id=opportunity_id)
     return await _read_opportunity_with_context(opp, db)
 
 @router.patch("/{opportunity_id}/assign")
@@ -343,7 +352,10 @@ async def assign_opportunity(opportunity_id: str, assignee: str, db: AsyncSessio
     opp.assigned_to = str(target.id) if target else None
     opp.updated_at = datetime.now(timezone.utc)
     await db.commit()
-    await push_opportunity_to_crm(opportunity_id)
+    try:
+        await push_opportunity_to_crm(opportunity_id)
+    except Exception:
+        logger.exception("crm_push_failed", opportunity_id=opportunity_id)
     return {"status": "ok", "assigned_to": assignee}
 
 
