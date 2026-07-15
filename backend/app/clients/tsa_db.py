@@ -401,6 +401,7 @@ class TSADatabase:
         filters: dict[str, Any] | None = None,
         fields: list[str] | None = None,
         limit: int = 500,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """
         Query tenders with SQL-level filtering.
@@ -419,9 +420,10 @@ class TSADatabase:
             LEFT JOIN source_organizations o ON o.id = t.source_organization_id
             {where}
             ORDER BY t.created_at DESC
-            LIMIT :limit
+            LIMIT :limit OFFSET :offset
         """
         params["limit"] = limit
+        params["offset"] = max(offset, 0)
 
         async with self._session_factory() as session:
             result = await session.execute(text(sql), params)
@@ -496,10 +498,12 @@ class TSADatabase:
         fields: list[str] | None = None,
         limit: int = 1000,
         direction: str = "desc",
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         select_cols = _map_fields(AWARD_FIELD_MAP, fields)
         where, params, join_clause = _build_award_where(filters)
         params["limit"] = limit
+        params["offset"] = max(offset, 0)
 
         sql = f"""
             SELECT {select_cols}
@@ -507,7 +511,7 @@ class TSADatabase:
             {join_clause}
             {where}
             ORDER BY a.award_date {"ASC" if direction.lower() == "asc" else "DESC"} NULLS LAST
-            LIMIT :limit
+            LIMIT :limit OFFSET :offset
         """
         async with self._session_factory() as session:
             result = await session.execute(text(sql), params)
@@ -521,17 +525,19 @@ class TSADatabase:
         filters: dict[str, Any] | None = None,
         fields: list[str] | None = None,
         limit: int = 1000,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         select_cols = _map_fields(COMPANY_FIELD_MAP, fields)
         where, params = _build_company_where(filters)
         params["limit"] = limit
+        params["offset"] = max(offset, 0)
 
         sql = f"""
             SELECT {select_cols}
             FROM companies c
             {where}
             ORDER BY c.name
-            LIMIT :limit
+            LIMIT :limit OFFSET :offset
         """
         async with self._session_factory() as session:
             result = await session.execute(text(sql), params)
@@ -545,17 +551,19 @@ class TSADatabase:
         filters: dict[str, Any] | None = None,
         fields: list[str] | None = None,
         limit: int = 1000,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         select_cols = _map_fields(ORGANIZATION_FIELD_MAP, fields)
         where, params = _build_org_where(filters)
         params["limit"] = limit
+        params["offset"] = max(offset, 0)
 
         sql = f"""
             SELECT {select_cols}
             FROM source_organizations o
             {where}
             ORDER BY o.name
-            LIMIT :limit
+            LIMIT :limit OFFSET :offset
         """
         async with self._session_factory() as session:
             result = await session.execute(text(sql), params)
@@ -580,6 +588,7 @@ class TSADatabase:
             params["tender_ids"] = tender_ids
         sql += " ORDER BY b.name"
         params["limit"] = limit
+        params["offset"] = max(offset, 0)
         sql += " LIMIT :limit"
 
         async with self._session_factory() as session:
@@ -605,6 +614,7 @@ class TSADatabase:
             params["company_ids"] = company_ids
         sql += " ORDER BY d.full_name"
         params["limit"] = limit
+        params["offset"] = max(offset, 0)
         sql += " LIMIT :limit"
 
         async with self._session_factory() as session:
@@ -638,6 +648,7 @@ class TSADatabase:
             sql += " WHERE " + " AND ".join(where_parts)
         sql += " ORDER BY kp.full_name"
         params["limit"] = limit
+        params["offset"] = max(offset, 0)
         sql += " LIMIT :limit"
 
         async with self._session_factory() as session:
@@ -663,6 +674,7 @@ class TSADatabase:
             params["organization_ids"] = organization_ids
         sql += " ORDER BY sd.full_name"
         params["limit"] = limit
+        params["offset"] = max(offset, 0)
         sql += " LIMIT :limit"
 
         async with self._session_factory() as session:

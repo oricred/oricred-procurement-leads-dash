@@ -47,6 +47,7 @@ ORGANIZATION_FIELDS = [
 # window makes the ingestion idempotent while keeping the scheduled query bounded.
 AWARD_INGEST_LOOKBACK_DAYS = 30
 AWARD_INGEST_LIMIT = 5_000
+AWARD_INGEST_MAX_PAGES = 20
 
 
 def _supplier_fallback_api_id(supplier: str) -> str:
@@ -194,7 +195,7 @@ async def _mark_overdue_watches(db, email: EmailAlertService, now: datetime) -> 
         )
 
 
-async def check_awards_for_watching():
+async def check_awards_for_watching(backfill: bool = False):
     """Ingest Tenders-SA awards regardless of watchlist membership.
 
     A watchlist match only updates that tender's monitoring state; it never filters
@@ -210,14 +211,22 @@ async def check_awards_for_watching():
             new_opportunity_ids: list[str] = []
             ingested_award_timestamps: list[datetime] = []
             state = await db.get(AwardIngestionState, "tenders_sa")
-            since = state.latest_award_at if state and state.latest_award_at else now - timedelta(days=AWARD_INGEST_LOOKBACK_DAYS)
+            since = now - timedelta(days=AWARD_INGEST_LOOKBACK_DAYS) if backfill else (state.latest_award_at if state and state.latest_award_at else now - timedelta(days=AWARD_INGEST_LOOKBACK_DAYS))
+            raw_awards: list[dict] = []
             try:
-                raw_awards = await tsa_db.query_awards(
-                    filters={"since": since.isoformat()},
-                    fields=AWARD_FIELDS,
-                    limit=AWARD_INGEST_LIMIT,
-                    direction="asc",
-                )
+                for page in range(AWARD_INGEST_MAX_PAGES):
+                    batch = await tsa_db.query_awards(
+                        filters={"since": since.isoformat()},
+                        fields=AWARD_FIELDS,
+                        limit=AWARD_INGEST_LIMIT,
+                        offset=page * AWARD_INGEST_LIMIT,
+                        direction="asc",
+                    )
+                    raw_awards.extend(batch)
+                    if len(batch) < AWARD_INGEST_LIMIT:
+                        break
+                else:
+                    logger.warning("award_ingestion_page_limit_reached", pages=AWARD_INGEST_MAX_PAGES, since=since.isoformat())
             except Exception as exc:
                 logger.error("award_ingestion_query_failed", error=str(exc))
                 raw_awards = []
@@ -340,3 +349,8 @@ async def check_awards_for_watching():
             return len(raw_awards)
     finally:
         await tsa_db.close()
+
+
+async def backfill_recent_awards() -> int:
+    """Admin-triggered recovery path: re-ingest the full current 30-day window."""
+    return await check_awards_for_watching(backfill=True)

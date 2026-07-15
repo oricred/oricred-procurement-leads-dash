@@ -280,6 +280,17 @@ class TestAwardsEndpoint:
         resp = client.get("/api/awards?buyer_org_id=org-sanral")
         assert resp.status_code == 200
 
+    def test_filter_all_buyers_by_province_and_municipality(self, client_and_mock):
+        client, mock_db = client_and_mock
+        result = MagicMock()
+        result.__iter__.return_value = []
+        mock_db.execute.return_value = result
+        mock_db.scalar.return_value = 0
+
+        resp = client.get("/api/awards?buyer_org_id=all&province=gp&buyer_scope=municipal")
+
+        assert resp.status_code == 200
+
     def test_filter_by_value_range(self, client_and_mock):
         client, mock_db = client_and_mock
         result = MagicMock()

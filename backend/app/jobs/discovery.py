@@ -29,6 +29,8 @@ TENDER_FIELDS = [
     "category_id", "closing_date", "source_organization_id",
     "source_organization", "type", "publication_date",
 ]
+TENDER_INGEST_PAGE_SIZE = 1_000
+TENDER_INGEST_MAX_PAGES = 20
 
 
 async def _process_tender(raw: dict, db, now: datetime) -> int:
@@ -64,7 +66,8 @@ async def _process_tender(raw: dict, db, now: datetime) -> int:
     db.add(tender)
     await db.flush()
 
-    return await _qualify_and_watch(tender, db, now)
+    await _qualify_and_watch(tender, db, now)
+    return 1
 
 
 async def _process_scraper_tender(result, metro_name: str, db, now: datetime) -> int:
@@ -102,7 +105,8 @@ async def _process_scraper_tender(result, metro_name: str, db, now: datetime) ->
     db.add(tender)
     await db.flush()
 
-    return await _qualify_and_watch(tender, db, now)
+    await _qualify_and_watch(tender, db, now)
+    return 1
 
 
 async def _qualify_and_watch(tender: Tender, db, now: datetime) -> int:
@@ -146,19 +150,27 @@ async def discover_new_tenders():
             logger.warning("category_refresh_failed", error=str(e))
 
         now = datetime.now(timezone.utc)
-        since = now.isoformat()
 
         async with async_session() as db:
             count = 0
 
-            # ── Query Tenders-SA database directly with SQL filters ──
+            # Persist every currently open Tenders-SA tender. Qualification is
+            # applied only after storage to decide whether it should be watched.
+            raw_tenders: list[dict] = []
             try:
-                qual_config = await QualificationService(db).get_config()
-                raw_tenders = await tsa_db.query_tenders_from_config(
-                    config=qual_config,
-                    since=since,
-                    fields=TENDER_FIELDS,
-                )
+                source_filters = {"closing_from": now.isoformat()}
+                for page in range(TENDER_INGEST_MAX_PAGES):
+                    batch = await tsa_db.query_tenders(
+                        filters=source_filters,
+                        fields=TENDER_FIELDS,
+                        limit=TENDER_INGEST_PAGE_SIZE,
+                        offset=page * TENDER_INGEST_PAGE_SIZE,
+                    )
+                    raw_tenders.extend(batch)
+                    if len(batch) < TENDER_INGEST_PAGE_SIZE:
+                        break
+                else:
+                    logger.warning("tender_ingestion_page_limit_reached", pages=TENDER_INGEST_MAX_PAGES)
             except Exception as e:
                 logger.error("tender_query_failed", error=str(e))
                 raw_tenders = []
@@ -208,7 +220,8 @@ async def discover_new_tenders():
                     logger.info("api_source_configured", source=src_key, name=src_name, base_url=src_cfg.get("base_url"))
 
             await db.commit()
-            logger.info("tenders_discovered", new=count, queried=len(raw_tenders))
+            logger.info("tenders_ingested", source="tenders_sa", new=count, queried=len(raw_tenders))
+            return count
 
     finally:
         await tsa_db.close()

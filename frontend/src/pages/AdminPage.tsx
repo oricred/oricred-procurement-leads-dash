@@ -784,7 +784,7 @@ function JobsTab() {
         </div>
       </div>
       <div className="p-3 rounded-lg bg-surface-300/70 border border-surface-400 text-xs text-gray-400">
-        <span className="text-gray-200 font-medium">Ingest Awards Now</span> runs the same award ingestion used by the 30-minute schedule: it checks watched tenders for new awards, creates lead cards for awarded suppliers, and retries contact enrichment.
+        <span className="text-gray-200 font-medium">Ingest Awards Now</span> re-ingests every Tenders-SA award from the last 30 days across all buyers. Watched tenders are matched after ingestion; new awarded suppliers receive leads and contact enrichment.
       </div>
       {triggerMutation.isError && <p className="text-red-400 text-sm">Job trigger failed.</p>}
       {isLoading ? <p className="text-gray-400">Loading...</p> : (

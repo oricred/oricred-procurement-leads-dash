@@ -44,12 +44,17 @@ def _query_awards():
     )
 
 
-def _filter_awards(query, supplier=None, buyer_org_id=None, date_from=None, date_to=None,
-                   value_min=None, value_max=None, source=None, has_opportunity=None, watch_context=None):
+def _filter_awards(query, supplier=None, buyer_org_id=None, province=None, buyer_scope=None,
+                   date_from=None, date_to=None, value_min=None, value_max=None,
+                   source=None, has_opportunity=None, watch_context=None):
     if supplier:
         query = query.where(Award.supplier_name.ilike(f"%{supplier}%"))
-    if buyer_org_id:
+    if buyer_org_id and buyer_org_id != "all":
         query = query.where(Award.buyer_org_id == buyer_org_id)
+    if province and province != "all":
+        query = query.where(Tender.province.ilike(province))
+    if buyer_scope == "municipal":
+        query = query.where(Organization.organization_type.ilike("%municipal%"))
     if date_from:
         query = query.where(Award.award_date >= datetime.combine(date_from, datetime.min.time()).replace(tzinfo=timezone.utc))
     if date_to:
@@ -99,13 +104,14 @@ def _item(row) -> AwardItem:
 @router.get("/awards", response_model=AwardsList)
 async def list_awards(
     supplier: str | None = None, buyer_org_id: str | None = None,
+    province: str | None = None, buyer_scope: str | None = Query(None, pattern="^(municipal|all)?$"),
     date_from: date | None = None, date_to: date | None = None,
     value_min: float | None = None, value_max: float | None = None, source: str | None = None,
     has_opportunity: bool | None = None, watch_context: str | None = Query(None, pattern="^(watched|not_watched|all)?$"), sort: str = "award_date", direction: str = "desc",
     page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
-    query = _filter_awards(_query_awards(), supplier, buyer_org_id, date_from, date_to, value_min, value_max, source, has_opportunity, watch_context)
+    query = _filter_awards(_query_awards(), supplier, buyer_org_id, province, buyer_scope, date_from, date_to, value_min, value_max, source, has_opportunity, watch_context)
     total = await db.scalar(select(func.count()).select_from(query.subquery())) or 0
     order = SORT_FIELDS.get(sort, Award.award_date)
     query = query.order_by(order.asc().nulls_last() if direction == "asc" else order.desc().nulls_last())
@@ -116,12 +122,13 @@ async def list_awards(
 @router.get("/awards/export")
 async def export_awards(
     supplier: str | None = None, buyer_org_id: str | None = None,
+    province: str | None = None, buyer_scope: str | None = Query(None, pattern="^(municipal|all)?$"),
     date_from: date | None = None, date_to: date | None = None,
     value_min: float | None = None, value_max: float | None = None, source: str | None = None,
     has_opportunity: bool | None = None, watch_context: str | None = Query(None, pattern="^(watched|not_watched|all)?$"), sort: str = "award_date", direction: str = "desc",
     db: AsyncSession = Depends(get_db),
 ):
-    query = _filter_awards(_query_awards(), supplier, buyer_org_id, date_from, date_to, value_min, value_max, source, has_opportunity, watch_context)
+    query = _filter_awards(_query_awards(), supplier, buyer_org_id, province, buyer_scope, date_from, date_to, value_min, value_max, source, has_opportunity, watch_context)
     order = SORT_FIELDS.get(sort, Award.award_date)
     rows = await db.execute(query.order_by(order.asc().nulls_last() if direction == "asc" else order.desc().nulls_last()))
     stream = io.StringIO()

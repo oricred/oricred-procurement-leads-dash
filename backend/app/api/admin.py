@@ -174,7 +174,7 @@ async def trigger_job(job_name: str, background_tasks: BackgroundTasks, db: Asyn
     from app.jobs.scheduler import run_job
     handlers = {
         "discover_tenders": "app.jobs.discovery:discover_new_tenders",
-        "check_awards": "app.jobs.award_check:check_awards_for_watching",
+        "check_awards": "app.jobs.award_check:backfill_recent_awards",
         "refresh_timing_model": "app.jobs.model_refresh:refresh_timing_model",
         "sync_crm": "app.jobs.crm_sync:sync_crm",
         "contact_enrichment": "app.jobs.contact_enrichment:run_contact_enrichment",

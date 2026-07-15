@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Award, Download, ExternalLink, History, Plus } from 'lucide-react';
-import { awardsApi, organizationsApi } from '../services/api';
+import { awardsApi, organizationsApi, tendersApi } from '../services/api';
 import type { AwardItem } from '../types';
 import FilterBar, { type FilterField } from '../components/FilterBar';
 import DataTable, { type ColumnDef } from '../components/DataTable';
@@ -37,15 +37,18 @@ export default function AwardsPage() {
   const queryParams = { ...filters, page, page_size: 50, sort, direction };
   const { data, isLoading, isError, refetch } = useQuery({ queryKey: ['awards', queryParams], queryFn: async () => (await awardsApi.list(queryParams)).data });
   const { data: orgs } = useQuery({ queryKey: ['organizations'], queryFn: async () => (await organizationsApi.list()).data, staleTime: 300000 });
+  const { data: provinces } = useQuery({ queryKey: ['tender-provinces'], queryFn: async () => (await tendersApi.provinces()).data, staleTime: 300000 });
   const create = useMutation({
     mutationFn: (id: string) => awardsApi.createLead(id),
     onSuccess: ({ data: lead }) => { queryClient.invalidateQueries({ queryKey: ['awards'] }); queryClient.invalidateQueries({ queryKey: ['leads'] }); navigate(`/pipeline?open=${lead.id}&created=1`); },
   });
   const fields: FilterField[] = [
     { key: 'supplier', label: 'Supplier', type: 'text', placeholder: 'Search supplier' },
-    { key: 'buyer_org_id', label: 'Buyer', type: 'select', options: orgs?.map(o => ({ label: o.name, value: o.id })) ?? [] },
+    { key: 'buyer_org_id', label: 'All buyers', type: 'select', options: orgs?.map(o => ({ label: o.name, value: o.id })) ?? [] },
+    { key: 'province', label: 'All provinces', type: 'select', options: provinces?.map(p => ({ label: p, value: p })) ?? [] },
+    { key: 'buyer_scope', label: 'All buyer types', type: 'select', options: [{ label: 'Municipal buyers', value: 'municipal' }] },
     { key: 'date_from', label: 'From', type: 'date' }, { key: 'date_to', label: 'To', type: 'date' },
-    { key: 'value_min', label: 'Min value', type: 'number' }, { key: 'source', label: 'All sources', type: 'select', options: [{ label: 'Tenders-SA', value: 'tenders_api' }, { label: 'Municipal', value: 'municipal' }] },
+    { key: 'value_min', label: 'Min value', type: 'number' },
     { key: 'watch_context', label: 'All awards', type: 'select', options: [{ label: 'From watched tender', value: 'watched' }, { label: 'Not from watched tender', value: 'not_watched' }] },
     { key: 'has_opportunity', label: 'Lead created', type: 'toggle' },
   ];
