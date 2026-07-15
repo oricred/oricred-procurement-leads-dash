@@ -38,13 +38,8 @@ export const opportunities = {
     }),
   get: (id: string) =>
     api.get<Opportunity>(`/opportunities/${id}`),
-  updateStage: (id: string, stage: string, version: number, assignedTo?: string) =>
-    api.patch<Opportunity>(`/opportunities/${id}/stage`, {
-      stage,
-      version,
-      assigned_to: assignedTo,
-    }),
-  assign: (id: string, assignee: string) =>
+  transition: (id: string, body: { action: string; version: number; changed_by?: string; lost_reason?: string; credit_decision?: string; confirm?: boolean; conditions_checklist?: Array<Record<string, unknown>> }) =>
+    api.post<Opportunity>(`/opportunities/${id}/transition`, body),  assign: (id: string, assignee: string) =>
     api.patch(`/opportunities/${id}/assign`, null, { params: { assignee } }),
   update: (id: string, body: { notes?: string; risk_flag?: string }) =>
     api.patch<Opportunity>(`/opportunities/${id}`, body),
@@ -164,6 +159,8 @@ export const historicalContactsApi = {
 export const awardsApi = {
   list: (params: Record<string, unknown>) =>
     api.get<{ items: AwardItem[]; total: number; page: number; page_size: number }>('/awards', { params }),
+  createLead: (awardId: string) => api.post<Opportunity>(`/awards/${awardId}/lead`),
+  exportUrl: (params: Record<string, string>) => `/api/awards/export?${new URLSearchParams(params).toString()}`,
 };
 
 export const tendersApi = {

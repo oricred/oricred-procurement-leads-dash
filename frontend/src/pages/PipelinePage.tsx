@@ -1,146 +1,23 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { opportunities } from '../services/api';
-import { STAGES, STAGE_LABELS, type Opportunity, type Stage } from '../types';
-import KanbanColumn from '../components/KanbanColumn';
-import OpportunityCard from '../components/OpportunityCard';
+import { STAGE_LABELS, type Opportunity } from '../types';
 import OpportunityModal from '../components/OpportunityModal';
-import AwardRadar from '../components/AwardRadar';
 
+const phases = {
+  Sales: ['new_lead', 'client_contacted', 'qualified_lead', 'won_opportunity'],
+  Credit: ['credit_preparation', 'credit_review', 'pre_approved', 'conditions_precedent'],
+  'Deal Execution': ['term_sheet_sent', 'term_sheet_received', 'contracts_sent', 'contracts_received', 'ready_to_rff'],
+} as const;
+const terminal = { Funded: ['funded'], 'Lost / Declined': ['lost_lead'] } as const;
+const money = (v: number | null) => v == null ? '—' : new Intl.NumberFormat('en-ZA', { style: 'currency', currency: 'ZAR', notation: 'compact' }).format(v);
+function Card({ opp, open }: { opp: Opportunity; open: () => void }) { return <button onClick={open} className="w-full text-left bg-surface-300 hover:bg-surface-400 border border-surface-400 rounded-lg p-3 transition-colors"><div className="flex justify-between gap-2"><span className="font-medium text-gray-100 truncate">{opp.company_name ?? 'Unresolved supplier'}</span><span className="font-mono text-xs text-gray-300">{money(opp.award_value)}</span></div><div className="mt-2 flex items-center justify-between gap-2"><span className="text-[10px] px-1.5 py-0.5 rounded bg-primary-500/10 text-primary-300">{STAGE_LABELS[opp.kanban_stage].toUpperCase()}</span><span className={opp.contact_sufficiency === 'sufficient' ? 'text-emerald-400 text-xs' : 'text-amber-400 text-xs'}>{opp.contact_sufficiency === 'sufficient' ? 'Contact ready' : 'Needs contact'}</span></div>{opp.needs_enrichment && <p className="mt-2 text-xs text-amber-300">Identity enrichment needed</p>}</button>; }
 export default function PipelinePage() {
-  const [searchParams] = useSearchParams();
-  const [activeCard, setActiveCard] = useState<Opportunity | null>(null);
-  const [selectedOpp, setSelectedOpp] = useState<Opportunity | null>(null);
-  const [showRadar, setShowRadar] = useState(true);
-  const queryClient = useQueryClient();
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 5 },
-    }),
-  );
-
-  const { data, isLoading } = useQuery({
-    queryKey: ['opportunities'],
-    queryFn: async () => {
-      const res = await opportunities.list();
-      return res.data;
-    },
-    refetchInterval: 15_000,
-  });
-
-  const stageMutation = useMutation({
-    mutationFn: ({ id, stage, version }: { id: string; stage: string; version: number }) =>
-      opportunities.updateStage(id, stage, version),
-    onMutate: async ({ id, stage }) => {
-      await queryClient.cancelQueries({ queryKey: ['opportunities'] });
-      const previous = queryClient.getQueryData<{ items: Opportunity[]; total: number }>(['opportunities']);
-      if (previous) {
-        queryClient.setQueryData(['opportunities'], {
-          ...previous,
-          items: previous.items.map((o) =>
-            o.id === id ? { ...o, kanban_stage: stage } : o
-          ),
-        });
-      }
-      return { previous };
-    },
-    onError: (_err, _vars, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(['opportunities'], context.previous);
-      }
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['opportunities'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
-    },
-  });
-
-  useEffect(() => {
-    const openId = searchParams.get('open');
-    if (openId && data?.items) {
-      const opp = data.items.find(o => o.id === openId);
-      if (opp) setSelectedOpp(opp);
-    }
-  }, [searchParams, data]);
-
-  const grouped: Record<string, Opportunity[]> = {};
-  for (const stage of STAGES) {
-    grouped[stage] = [];
-  }
-  for (const opp of data?.items ?? []) {
-    if (grouped[opp.kanban_stage]) {
-      grouped[opp.kanban_stage].push(opp);
-    }
-  }
-
-  const handleDragStart = (event: DragStartEvent) => {
-    const opp = data?.items.find((o) => o.id === event.active.id);
-    if (opp) setActiveCard(opp);
-  };
-
-  const handleDragEnd = (event: DragEndEvent) => {
-    setActiveCard(null);
-    const { active, over } = event;
-    if (!over) return;
-
-    const oppId = active.id as string;
-    const newStage = over.id as Stage;
-
-    const opp = data?.items.find((o) => o.id === oppId);
-    if (!opp || opp.kanban_stage === newStage) return;
-
-    stageMutation.mutate({ id: oppId, stage: newStage, version: opp.version });
-  };
-
-  return (
-    <div className="flex gap-6 h-full">
-      {/* Kanban */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-white">Opportunity Pipeline</h2>
-          <button
-            onClick={() => setShowRadar(!showRadar)}
-            className="text-xs text-gray-400 hover:text-gray-200 transition-colors"
-          >
-            {showRadar ? 'Hide Radar' : 'Show Radar'}
-          </button>
-        </div>
-
-        {isLoading ? (
-          <div className="flex items-center justify-center h-64 text-gray-500">Loading...</div>
-        ) : (
-          <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-            <div className="flex gap-4 overflow-x-auto pb-4 h-[calc(100vh-10rem)]">
-              {STAGES.map((stage) => (
-                <KanbanColumn
-                  key={stage}
-                  stage={stage}
-                  label={STAGE_LABELS[stage]}
-                  count={grouped[stage]?.length ?? 0}
-                  items={grouped[stage] ?? []}
-                  onCardClick={setSelectedOpp}
-                />
-              ))}
-            </div>
-
-            <DragOverlay dropAnimation={null}>
-              {activeCard ? (
-                <OpportunityCard opportunity={activeCard} onClick={() => {}} isOverlay />
-              ) : null}
-            </DragOverlay>
-          </DndContext>
-        )}
-      </div>
-
-      {showRadar && <AwardRadar />}
-
-      {selectedOpp && (
-        <OpportunityModal opportunity={selectedOpp} onClose={() => setSelectedOpp(null)} />
-      )}
-    </div>
-  );
+  const [params] = useSearchParams(); const [selected, setSelected] = useState<Opportunity | null>(null); const [openTray, setOpenTray] = useState<string | null>(null);
+  const { data, isLoading } = useQuery({ queryKey: ['opportunities'], queryFn: async () => (await opportunities.list()).data, refetchInterval: 15000 });
+  useEffect(() => { const id = params.get('open'); if (id && data) setSelected(data.items.find(x => x.id === id) ?? null); }, [params, data]);
+  const byPhase = (stages: readonly string[]) => (data?.items ?? []).filter(o => stages.includes(o.kanban_stage));
+  return <div className="h-full flex flex-col"><div className="mb-4"><h2 className="text-lg font-semibold text-white">Deal Pipeline</h2><p className="text-xs text-gray-500">Move a deal deliberately from its detail panel; exact state stays visible on every card.</p></div>{isLoading ? <div className="text-gray-500">Loading pipeline…</div> : <><div className="grid grid-cols-1 lg:grid-cols-3 gap-4">{Object.entries(phases).map(([phase, states]) => { const items = byPhase(states); return <section key={phase} className="rounded-xl border border-surface-300 bg-surface-200/50 min-h-72"><header className="p-3 border-b border-surface-300 flex justify-between"><h3 className="font-semibold text-gray-200">{phase}</h3><span className="text-xs text-gray-500">{items.length}</span></header><div className="p-3 space-y-3">{items.map(o => <Card key={o.id} opp={o} open={() => setSelected(o)} />)}{items.length === 0 && <p className="text-center text-xs text-gray-600 py-8">No active deals</p>}</div></section>; })}</div><div className="mt-5 space-y-2">{Object.entries(terminal).map(([name, states]) => { const items = byPhase(states); const expanded = openTray === name; return <section key={name} className="border border-surface-300 rounded-lg"><button onClick={() => setOpenTray(expanded ? null : name)} className="w-full px-4 py-3 flex items-center gap-2 text-left text-sm text-gray-300">{expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}{name}<span className="text-gray-600">{items.length}</span></button>{expanded && <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3 pt-0">{items.map(o => <Card key={o.id} opp={o} open={() => setSelected(o)} />)}</div>}</section>; })}</div></>}{selected && <OpportunityModal opportunity={selected} onClose={() => setSelected(null)} />}</div>;
 }
-

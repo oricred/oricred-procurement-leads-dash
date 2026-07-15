@@ -89,6 +89,9 @@ async def mark_opportunity_contacted(
     if opp.version != version:
         raise RuntimeError("Version conflict: opportunity was modified")
 
+    if opp.kanban_stage != "new_lead":
+        raise RuntimeError("Only a new lead can be marked contacted")
+
     old_stage = opp.kanban_stage
     opp.kanban_stage = "client_contacted"
     opp.contacted_at = datetime.now(timezone.utc)

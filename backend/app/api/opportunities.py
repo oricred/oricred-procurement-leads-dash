@@ -12,7 +12,7 @@ from app.models.tender import Tender
 from app.models.company import Company
 from app.models.organization import Organization
 from app.models.contact import Contact
-from app.schemas.opportunity import OpportunityRead, OpportunityStageUpdate, OpportunityUpdate, OpportunityList, AuditEntry, OpportunityContactedUpdate
+from app.schemas.opportunity import OpportunityRead, OpportunityStageUpdate, OpportunityUpdate, OpportunityList, AuditEntry, OpportunityContactedUpdate, OpportunityTransition
 from app.schemas.contact import ContactRead
 from app.schemas.buyer_relationship import BuyerRelationshipRead
 from app.services.buyer_relationship import compute_relationship, get_relationship
@@ -21,7 +21,7 @@ from app.services.buyer_preference import compute_buyer_preference
 from app.services.crm.sync import push_opportunity_to_crm
 from app.services.lead_scoring import choose_primary_contact, refresh_lead_scoring
 from app.services.lead_service import mark_opportunity_contacted, retry_contact_lookup_for_opportunity
-from app.workflow import LEGACY_STAGE_MAP, is_workflow_stage, normalize_stage
+from app.workflow import LEGACY_STAGE_MAP, WORKFLOW_NEXT, is_workflow_stage, normalize_stage
 
 router = APIRouter()
 
@@ -74,6 +74,10 @@ def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: 
         next_action=opp.next_action,
         last_contact_lookup_at=opp.last_contact_lookup_at,
         contacted_at=opp.contacted_at,
+        credit_decision=opp.credit_decision,
+        lost_reason=opp.lost_reason,
+        conditions_checklist=opp.conditions_checklist or [],
+        needs_enrichment=opp.needs_enrichment,
         primary_contact=ContactRead.model_validate(choose_primary_contact([c for c in contacts or [] if c.company_id])) if choose_primary_contact([c for c in contacts or [] if c.company_id]) else None,
         source_tender_title=tender.title if tender else None,
         source_award_date=award.award_date if award else None,
@@ -130,6 +134,65 @@ async def list_opportunities(
     return OpportunityList(items=items, total=len(items))
 
 
+@router.post("/{opportunity_id}/transition", response_model=OpportunityRead)
+async def transition_opportunity(
+    opportunity_id: str, body: OpportunityTransition, db: AsyncSession = Depends(get_db),
+):
+    opp = await db.get(Opportunity, opportunity_id)
+    if not opp:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+    if opp.version != body.version:
+        raise HTTPException(status_code=409, detail="Version conflict: opportunity was modified")
+
+    old_stage = normalize_stage(opp.kanban_stage) or opp.kanban_stage
+    action = body.action
+    if action in ("decline", "lose"):
+        if not body.lost_reason or not body.lost_reason.strip():
+            raise HTTPException(status_code=400, detail="A lost reason is required")
+        new_stage = "lost_lead"
+    elif action == "reopen":
+        if old_stage not in ("funded", "lost_lead") or not body.confirm:
+            raise HTTPException(status_code=400, detail="Terminal reopening requires confirmation")
+        new_stage = "new_lead"
+    elif action == "back":
+        if not body.confirm:
+            raise HTTPException(status_code=400, detail="Backward movement requires confirmation")
+        previous = {next_stage: current for current, next_stage in WORKFLOW_NEXT.items()}
+        if old_stage not in previous:
+            raise HTTPException(status_code=400, detail="This stage cannot move backward")
+        new_stage = previous[old_stage]
+    elif action == "advance":
+        new_stage = WORKFLOW_NEXT.get(old_stage)
+        if not new_stage:
+            raise HTTPException(status_code=400, detail="This stage cannot advance")
+        if old_stage == "credit_review":
+            if body.credit_decision != "approved":
+                raise HTTPException(status_code=400, detail="Credit approval is required before pre-approval")
+            opp.credit_decision = body.credit_decision
+        if old_stage == "conditions_precedent":
+            checklist = body.conditions_checklist if body.conditions_checklist is not None else (opp.conditions_checklist or [])
+            if not checklist or not all(bool(item.get("cleared")) for item in checklist):
+                raise HTTPException(status_code=400, detail="All conditions must be cleared before advancing")
+            opp.conditions_checklist = checklist
+    else:
+        raise HTTPException(status_code=400, detail="Use advance, back, reopen, decline, or lose")
+
+    opp.kanban_stage = new_stage
+    opp.version += 1
+    opp.updated_at = datetime.now(timezone.utc)
+    if new_stage == "lost_lead":
+        opp.lost_reason = body.lost_reason.strip()
+        opp.closed_at = datetime.now(timezone.utc)
+    elif new_stage == "funded":
+        opp.closed_at = datetime.now(timezone.utc)
+    elif action == "reopen":
+        opp.closed_at = None
+    db.add(OpportunityAudit(opportunity_id=opp.id, from_stage=old_stage, to_stage=new_stage, changed_by=body.changed_by or "system"))
+    await db.commit()
+    await db.refresh(opp)
+    await push_opportunity_to_crm(opportunity_id)
+    return await _read_opportunity_with_context(opp, db)
+
 @router.get("/{opportunity_id}", response_model=OpportunityRead)
 async def get_opportunity(opportunity_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Opportunity).where(Opportunity.id == opportunity_id))
@@ -169,6 +232,8 @@ async def update_stage(
 
     if opp.version != body.version:
         raise HTTPException(status_code=409, detail="Version conflict: opportunity was modified")
+
+    raise HTTPException(status_code=400, detail="Use the approved transition endpoint for workflow changes")
 
     new_stage = normalize_stage(body.stage)
     if not is_workflow_stage(new_stage):

@@ -14,6 +14,10 @@ class AwardItem(BaseModel):
     bee_level: int | None = None
     source: str
     opportunity_id: str | None = None
+    supplier_company_id: str | None = None
+    supplier_resolved: bool = False
+    lead_state: str = "not_created"
+    contact_readiness: str | None = None
 
     model_config = {"from_attributes": True}
 

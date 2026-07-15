@@ -6,7 +6,8 @@ WORKFLOW_STAGES = [
     "won_opportunity",
     "credit_preparation",
     "credit_review",
-    "conditions_precedent_preapproved",
+    "pre_approved",
+    "conditions_precedent",
     "term_sheet_sent",
     "term_sheet_received",
     "contracts_sent",
@@ -23,7 +24,8 @@ WORKFLOW_STAGE_LABELS = {
     "won_opportunity": "Won Opportunity",
     "credit_preparation": "Credit Preparation",
     "credit_review": "Credit Review",
-    "conditions_precedent_preapproved": "Conditions / Pre-Approved",
+    "pre_approved": "Pre-Approved",
+    "conditions_precedent": "Conditions Precedent",
     "term_sheet_sent": "Term Sheet Sent",
     "term_sheet_received": "Term Sheet Received",
     "contracts_sent": "Contracts Sent",
@@ -41,6 +43,19 @@ LEGACY_STAGE_MAP = {
     "closed": "lost_lead",
 }
 
+
+# The former combined state is retained as a database compatibility alias.
+LEGACY_STAGE_MAP["conditions_precedent_preapproved"] = "pre_approved"
+
+WORKFLOW_NEXT = {
+    "new_lead": "client_contacted", "client_contacted": "qualified_lead",
+    "qualified_lead": "won_opportunity", "won_opportunity": "credit_preparation",
+    "credit_preparation": "credit_review", "credit_review": "pre_approved",
+    "pre_approved": "conditions_precedent", "conditions_precedent": "term_sheet_sent",
+    "term_sheet_sent": "term_sheet_received", "term_sheet_received": "contracts_sent",
+    "contracts_sent": "contracts_received", "contracts_received": "ready_to_rff",
+    "ready_to_rff": "funded",
+}
 
 def normalize_stage(stage: str | None) -> str | None:
     if stage is None:

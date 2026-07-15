@@ -9,6 +9,10 @@ export interface AwardItem {
   bee_level: number | null;
   source: string;
   opportunity_id: string | null;
+  supplier_company_id: string | null;
+  supplier_resolved: boolean;
+  lead_state: string;
+  contact_readiness: string | null;
 }
 
 export interface TenderItem {
@@ -86,6 +90,10 @@ export interface Opportunity {
   next_action: string | null;
   last_contact_lookup_at: string | null;
   contacted_at: string | null;
+  credit_decision: string | null;
+  lost_reason: string | null;
+  conditions_checklist: Record<string, unknown>[];
+  needs_enrichment: boolean;
   primary_contact: Contact | null;
   source_tender_title: string | null;
   source_award_date: string | null;
@@ -107,7 +115,8 @@ export type Stage =
   | 'won_opportunity'
   | 'credit_preparation'
   | 'credit_review'
-  | 'conditions_precedent_preapproved'
+  | 'pre_approved'
+  | 'conditions_precedent'
   | 'term_sheet_sent'
   | 'term_sheet_received'
   | 'contracts_sent'
@@ -123,7 +132,8 @@ export const STAGES: Stage[] = [
   'won_opportunity',
   'credit_preparation',
   'credit_review',
-  'conditions_precedent_preapproved',
+  'pre_approved',
+  'conditions_precedent',
   'term_sheet_sent',
   'term_sheet_received',
   'contracts_sent',
@@ -140,7 +150,8 @@ export const STAGE_LABELS: Record<Stage, string> = {
   won_opportunity: 'Won Opportunity',
   credit_preparation: 'Credit Prep',
   credit_review: 'Credit Review',
-  conditions_precedent_preapproved: 'Conditions / Pre-Approved',
+  pre_approved: 'Pre-Approved',
+  conditions_precedent: 'Conditions Precedent',
   term_sheet_sent: 'Term Sheet Sent',
   term_sheet_received: 'Term Sheet Received',
   contracts_sent: 'Contracts Sent',
@@ -157,7 +168,8 @@ export const STAGE_COLORS: Record<Stage, string> = {
   won_opportunity: 'border-l-emerald-500',
   credit_preparation: 'border-l-amber-500',
   credit_review: 'border-l-orange-500',
-  conditions_precedent_preapproved: 'border-l-yellow-500',
+  pre_approved: 'border-l-yellow-500',
+  conditions_precedent: 'border-l-amber-500',
   term_sheet_sent: 'border-l-cyan-500',
   term_sheet_received: 'border-l-teal-500',
   contracts_sent: 'border-l-indigo-500',

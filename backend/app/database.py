@@ -38,6 +38,11 @@ ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS lead_priority_reasons JSON;
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS next_action VARCHAR(64);
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS last_contact_lookup_at TIMESTAMP WITH TIME ZONE;
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS contacted_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS credit_decision VARCHAR(32);
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS lost_reason TEXT;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS conditions_checklist JSON;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS needs_enrichment BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_opportunities_award_id ON opportunities(award_id) WHERE award_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS contacts (
     id VARCHAR(36) PRIMARY KEY,
     company_id VARCHAR(36),

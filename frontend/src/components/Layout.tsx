@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { TrendingUp, Columns, Eye, LogOut, Activity, Shield, Clock, Award, FileText, UsersRound, Archive } from 'lucide-react';
+import { TrendingUp, Columns, LogOut, Activity, Shield, Search, UsersRound } from 'lucide-react';
 import { auth, dashboard } from '../services/api';
 import { useState } from 'react';
 
@@ -51,15 +51,10 @@ export default function Layout() {
 
         <nav className="flex-1 p-3 space-y-1">
           {[
-            { path: '/leads', label: 'Leads', icon: UsersRound },
-            { path: '/pipeline', label: 'Pipeline', icon: Columns },
-            { path: '/matching', label: 'Matching', icon: Eye },
-            { path: '/awards', label: 'Awards', icon: Award },
-            { path: '/tenders', label: 'Tenders', icon: FileText },
-            { path: '/historical-contacts', label: 'Historical Contacts', icon: Archive },
-            { path: '/past-due', label: 'Past Due', icon: Clock },
-            ...(isAdmin ? [{ path: '/admin', label: 'Admin', icon: Shield }] : []),
-          ].map(({ path, label, icon: Icon }) => (
+            { path: '/discover', label: 'Discover', icon: Search },
+            { path: '/leads', label: 'Lead Inbox', icon: UsersRound },
+            { path: '/pipeline', label: 'Deal Pipeline', icon: Columns },
+            ...(isAdmin ? [{ path: '/admin', label: 'Admin', icon: Shield }] : []),          ].map(({ path, label, icon: Icon }) => (
             <NavLink
               key={path}
               to={path}

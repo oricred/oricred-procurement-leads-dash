@@ -28,6 +28,10 @@ class OpportunityRead(BaseModel):
     next_action: str | None = None
     last_contact_lookup_at: datetime | None = None
     contacted_at: datetime | None = None
+    credit_decision: str | None = None
+    lost_reason: str | None = None
+    conditions_checklist: list[dict] = []
+    needs_enrichment: bool = False
     primary_contact: ContactRead | None = None
     source_tender_title: str | None = None
     source_award_date: datetime | None = None
@@ -67,6 +71,16 @@ class OpportunityStageUpdate(BaseModel):
     stage: str
     assigned_to: str | None = None
     version: int
+
+
+class OpportunityTransition(BaseModel):
+    action: str
+    version: int
+    changed_by: str | None = None
+    lost_reason: str | None = None
+    credit_decision: str | None = None
+    confirm: bool = False
+    conditions_checklist: list[dict] | None = None
 
 
 class OpportunityContactedUpdate(BaseModel):

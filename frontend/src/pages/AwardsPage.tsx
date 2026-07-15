@@ -1,203 +1,59 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Award, ExternalLink } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Award, Download, ExternalLink, History, Plus } from 'lucide-react';
 import { awardsApi, organizationsApi } from '../services/api';
 import type { AwardItem } from '../types';
-import FilterBar from '../components/FilterBar';
-import DataTable from '../components/DataTable';
-import type { FilterField } from '../components/FilterBar';
-import type { ColumnDef } from '../components/DataTable';
+import FilterBar, { type FilterField } from '../components/FilterBar';
+import DataTable, { type ColumnDef } from '../components/DataTable';
 
-function formatCurrency(value: number | null | undefined): string {
-  if (!value) return '—';
-  if (value >= 1_000_000) return `R${(value / 1_000_000).toFixed(1)}M`;
-  return `R${(value / 1_000).toFixed(0)}K`;
-}
-
-function formatDate(d: string | null | undefined): string {
-  if (!d) return '—';
-  return new Date(d).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' });
-}
+const money = (v: number | null) => v == null ? '—' : new Intl.NumberFormat('en-ZA', { style: 'currency', currency: 'ZAR', notation: 'compact' }).format(v);
+const date = (v: string | null) => v ? new Date(v).toLocaleDateString('en-ZA') : '—';
 
 export default function AwardsPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
-
-  const [page, setPage] = useState(1);
-  const [filters, setFilters] = useState<Record<string, string>>(() => {
-    const initial: Record<string, string> = {};
-    for (const [k, v] of searchParams.entries()) {
-      if (k !== 'page') initial[k] = v;
-    }
-    return initial;
-  });
+  const queryClient = useQueryClient();
+  const [page, setPage] = useState(Number(params.get('page') || 1));
+  const [filters, setFilters] = useState<Record<string, string>>(() => Object.fromEntries([...params].filter(([key]) => !['page', 'sort', 'direction'].includes(key))));
+  const [sort, setSort] = useState(params.get('sort') || 'award_date');
+  const [direction, setDirection] = useState(params.get('direction') || 'desc');
+  const [hidden, setHidden] = useState<string[]>([]);
 
   useEffect(() => {
-    const params = new URLSearchParams();
-    for (const [k, v] of Object.entries(filters)) {
-      if (v) params.set(k, v);
-    }
-    if (page > 1) params.set('page', String(page));
-    setSearchParams(params, { replace: true });
-  }, [filters, page, setSearchParams]);
-
-  const queryParams = { ...filters, page, page_size: 50 };
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ['awards', queryParams],
-    queryFn: async () => {
-      const res = await awardsApi.list(queryParams);
-      return res.data;
-    },
+    const next = new URLSearchParams(filters);
+    if (page > 1) next.set('page', String(page));
+    next.set('sort', sort); next.set('direction', direction);
+    setParams(next, { replace: true });
+  }, [filters, page, sort, direction, setParams]);
+  const queryParams = { ...filters, page, page_size: 50, sort, direction };
+  const { data, isLoading, isError, refetch } = useQuery({ queryKey: ['awards', queryParams], queryFn: async () => (await awardsApi.list(queryParams)).data });
+  const { data: orgs } = useQuery({ queryKey: ['organizations'], queryFn: async () => (await organizationsApi.list()).data, staleTime: 300000 });
+  const create = useMutation({
+    mutationFn: (id: string) => awardsApi.createLead(id),
+    onSuccess: ({ data: lead }) => { queryClient.invalidateQueries({ queryKey: ['awards'] }); queryClient.invalidateQueries({ queryKey: ['leads'] }); navigate(`/pipeline?open=${lead.id}&created=1`); },
   });
-
-  const { data: orgs } = useQuery({
-    queryKey: ['organizations'],
-    queryFn: async () => {
-      const res = await organizationsApi.list();
-      return res.data;
-    },
-    staleTime: 300_000,
-  });
-
-  const filterFields: FilterField[] = [
+  const fields: FilterField[] = [
     { key: 'supplier', label: 'Supplier', type: 'text', placeholder: 'Search supplier' },
-    {
-      key: 'buyer_org_id', label: 'Buyer', type: 'select',
-      options: orgs?.map(o => ({ label: o.name, value: o.id })) ?? [],
-    },
-    { key: 'date_from', label: 'Date from', type: 'date' },
-    { key: 'date_to', label: 'Date to', type: 'date' },
-    { key: 'value_min', label: 'Value min', type: 'number', placeholder: 'Min' },
-    { key: 'value_max', label: 'Value max', type: 'number', placeholder: 'Max' },
-    {
-      key: 'source', label: 'Source', type: 'select',
-      options: [
-        { label: 'Tenders-SA', value: 'tenders_api' },
-        { label: 'Municipal', value: 'municipal' },
-      ],
-    },
-    { key: 'has_opportunity', label: 'Has opportunity', type: 'toggle' },
+    { key: 'buyer_org_id', label: 'Buyer', type: 'select', options: orgs?.map(o => ({ label: o.name, value: o.id })) ?? [] },
+    { key: 'date_from', label: 'From', type: 'date' }, { key: 'date_to', label: 'To', type: 'date' },
+    { key: 'value_min', label: 'Min value', type: 'number' }, { key: 'source', label: 'Source', type: 'select', options: [{ label: 'Tenders-SA', value: 'tenders_api' }, { label: 'Municipal', value: 'municipal' }] },
+    { key: 'has_opportunity', label: 'Lead created', type: 'toggle' },
   ];
-
-  const columns: ColumnDef[] = [
-    {
-      key: 'supplier_name', label: 'Supplier',
-      render: (val: unknown, row: Record<string, unknown>) => (
-        <button
-          onClick={() => { setFilters(prev => ({ ...prev, supplier: val as string })); setPage(1); }}
-          className="text-sm font-medium text-gray-200 hover:text-primary-400 transition-colors text-left"
-        >
-          {val as string ?? '—'}
-        </button>
-      ),
-      width: '20%',
-    },
-    {
-      key: 'buyer_org_name', label: 'Buyer',
-      render: (val: unknown, row: Record<string, unknown>) => {
-        const buyerId = row.buyer_org_id as string | null;
-        return (
-          <button
-            onClick={() => { setFilters(prev => ({ ...prev, buyer_org_id: buyerId ?? '' })); setPage(1); }}
-            className="text-xs text-gray-400 hover:text-primary-400 transition-colors text-left"
-          >
-            {(val as string) ?? '—'}
-          </button>
-        );
-      },
-      width: '18%',
-    },
-    {
-      key: 'tender_title', label: 'Tender',
-      render: (val: unknown) => (
-        <span className="text-xs text-gray-400 block truncate max-w-[200px]" title={val as string ?? ''}>
-          {val as string ?? '—'}
-        </span>
-      ),
-      width: '25%',
-    },
-    {
-      key: 'amount', label: 'Value',
-      render: (val: unknown) => (
-        <span className="text-sm font-mono text-gray-200 font-medium">{formatCurrency(val as number | null)}</span>
-      ),
-      className: 'text-right',
-      width: '12%',
-    },
-    {
-      key: 'award_date', label: 'Date',
-      render: (val: unknown) => (
-        <span className="text-xs text-gray-400">{formatDate(val as string | null)}</span>
-      ),
-      width: '12%',
-    },
-    {
-      key: 'opportunity_id', label: 'Link',
-      render: (val: unknown) => val ? (
-        <button
-          onClick={() => navigate(`/pipeline?open=${val as string}`)}
-          className="text-primary-400 hover:text-primary-300 transition-colors"
-          title="Open in Pipeline"
-        >
-          <ExternalLink className="w-3.5 h-3.5" />
-        </button>
-      ) : (
-        <span className="text-gray-600">—</span>
-      ),
-      className: 'text-center',
-      width: '8%',
-    },
-  ];
-
-  const handleFilterChange = useCallback((key: string, value: string) => {
-    setFilters(prev => ({ ...prev, [key]: value }));
-    setPage(1);
-  }, []);
-
-  const handleClear = useCallback(() => {
-    setFilters({});
-    setPage(1);
-  }, []);
-
-  return (
-    <div>
-      <div className="flex items-center gap-2 mb-4">
-        <Award className="w-5 h-5 text-primary-400" />
-        <h2 className="text-lg font-semibold text-white">Awards</h2>
-        {data && (
-          <span className="text-xs px-2 py-0.5 rounded-full bg-surface-300 text-gray-400">
-            {data.total.toLocaleString()} total
-          </span>
-        )}
-      </div>
-
-      <div className="mb-4">
-        <FilterBar fields={filterFields} values={filters} onChange={handleFilterChange} onClear={handleClear} />
-      </div>
-
-      {isError ? (
-        <div className="glass rounded-xl p-8 text-center">
-          <p className="text-sm text-red-400 mb-2">Failed to load awards.</p>
-          <button
-            onClick={() => refetch()}
-            className="text-xs text-primary-400 hover:text-primary-300 transition-colors"
-          >
-            Retry
-          </button>
-        </div>
-      ) : (
-        <DataTable
-          columns={columns}
-          data={(data?.items ?? []) as unknown as Record<string, unknown>[]}
-          page={page}
-          pageSize={50}
-          total={data?.total ?? 0}
-          onPageChange={setPage}
-          isLoading={isLoading}
-          emptyMessage="No awards match your filters."
-        />
-      )}
-    </div>
-  );
+  const columns: ColumnDef[] = useMemo<ColumnDef[]>(() => [
+    { key: 'supplier_name', label: 'Supplier', render: (v: unknown) => <span className="font-medium text-gray-100">{String(v)}</span> },
+    { key: 'buyer_org_name', label: 'Buyer' }, { key: 'tender_title', label: 'Tender', render: (v: unknown) => <span className="text-xs text-gray-400 block truncate max-w-56">{String(v ?? '—')}</span> },
+    { key: 'amount', label: 'Value', render: (v: unknown) => <span className="font-mono">{money(v as number | null)}</span> },
+    { key: 'award_date', label: 'Awarded', render: (v: unknown) => date(v as string | null) }, { key: 'bee_level', label: 'B-BBEE', render: (v: unknown) => v == null ? '—' : `Level ${v}` },
+    { key: 'source', label: 'Source' }, { key: 'lead_state', label: 'Lead', render: (v: unknown, row: Record<string, unknown>) => <span className={(row as unknown as AwardItem).contact_readiness === 'sufficient' ? 'text-emerald-400' : 'text-amber-300'}>{String(v).replace(/_/g, ' ')}</span> },
+    { key: 'id', label: 'Actions', render: (_v: unknown, row: Record<string, unknown>) => { const a = row as unknown as AwardItem; return <div className="flex gap-2"><button onClick={() => a.opportunity_id ? navigate(`/pipeline?open=${a.opportunity_id}`) : create.mutate(a.id)} className="text-primary-400 hover:text-primary-300" title={a.opportunity_id ? 'Open lead' : 'Create lead'}>{a.opportunity_id ? <ExternalLink className="w-4 h-4" /> : <Plus className="w-4 h-4" />}</button><button onClick={() => navigate("/discover?tab=history")} className="text-gray-400 hover:text-gray-200" title="View supplier history"><History className="w-4 h-4" /></button></div> } },
+  ].filter(c => !hidden.includes(c.key)), [create, hidden, navigate]);
+  const toggleSort = () => { setDirection(d => sort === 'award_date' && d === 'desc' ? 'asc' : 'desc'); setSort('award_date'); };
+  const exportCsv = () => window.open(awardsApi.exportUrl({ ...filters, sort, direction }), '_blank', 'noopener,noreferrer');
+  return <div>
+    <div className="flex flex-wrap items-center gap-3 mb-4"><Award className="w-5 h-5 text-primary-400" /><div><h2 className="text-lg font-semibold text-white">Award intelligence</h2><p className="text-xs text-gray-500">Create outreach-ready leads from awarded suppliers.</p></div><span className="text-xs text-gray-500">{data?.total ?? 0} results</span><button onClick={toggleSort} className="ml-auto text-xs text-gray-400 hover:text-white">Sort award date {direction === 'desc' ? '↓' : '↑'}</button><button onClick={exportCsv} className="inline-flex gap-1 text-xs text-primary-400"><Download className="w-4 h-4" />CSV</button></div>
+    <FilterBar fields={fields} values={filters} onChange={(k, v) => { setFilters(f => ({ ...f, [k]: v })); setPage(1); }} onClear={() => { setFilters({}); setPage(1); }} />
+    <details className="my-3 text-xs text-gray-500"><summary className="cursor-pointer">Columns</summary><div className="flex flex-wrap gap-3 mt-2">{['buyer_org_name','tender_title','bee_level','source','lead_state'].map(key => <label key={key}><input type="checkbox" checked={!hidden.includes(key)} onChange={() => setHidden(h => h.includes(key) ? h.filter(x => x !== key) : [...h, key])} /> {key.replace(/_/g, ' ')}</label>)}</div></details>
+    {isError ? <div className="glass p-8 text-center text-red-400">Awards could not load. <button onClick={() => refetch()}>Retry</button></div> : <DataTable columns={columns} data={(data?.items ?? []) as unknown as Record<string, unknown>[]} page={page} pageSize={50} total={data?.total ?? 0} onPageChange={setPage} isLoading={isLoading} emptyMessage="No awards match these filters." />}
+  </div>;
 }

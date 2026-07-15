@@ -112,6 +112,24 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
       queryClient.invalidateQueries({ queryKey: ['opportunity-audit', opp.id] });
     },
   });
+  const transitionMutation = useMutation({
+    mutationFn: (body: { action: string; version: number; lost_reason?: string; credit_decision?: string; confirm?: boolean; conditions_checklist?: Array<Record<string, unknown>> }) => opportunities.transition(opp.id, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['opportunities'] });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      queryClient.invalidateQueries({ queryKey: ['opportunity-audit', opp.id] });
+    },
+  });
+  const advance = () => {
+    const body: { action: string; version: number; credit_decision?: string; conditions_checklist?: Array<Record<string, unknown>> } = { action: 'advance', version: opp.version };
+    if (opp.kanban_stage === 'credit_review') body.credit_decision = window.prompt('Credit decision: type approved to continue') ?? '';
+    if (opp.kanban_stage === 'conditions_precedent') {
+      const raw = window.prompt('Conditions checklist JSON. Every item must include "cleared": true.', JSON.stringify(opp.conditions_checklist ?? []));
+      try { body.conditions_checklist = raw ? JSON.parse(raw) : []; } catch { return; }
+    }
+    transitionMutation.mutate(body);
+  };
+  const decline = () => { const lost_reason = window.prompt('Why was this lead lost or declined?'); if (lost_reason) transitionMutation.mutate({ action: 'decline', version: opp.version, lost_reason }); };
   const updateMutation = useMutation({
     mutationFn: (body: { notes?: string; risk_flag?: string }) => opportunities.update(opp.id, body),
     onSuccess: () => {
@@ -151,6 +169,8 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button onClick={advance} disabled={transitionMutation.isPending || ['funded', 'lost_lead'].includes(opp.kanban_stage)} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50">Advance</button>
+            <button onClick={decline} disabled={transitionMutation.isPending || ['funded', 'lost_lead'].includes(opp.kanban_stage)} className="px-2.5 py-1.5 text-xs rounded text-red-300 hover:bg-red-500/10 disabled:opacity-50">Decline</button>
             <button
               onClick={() => findContactMutation.mutate()}
               disabled={findContactMutation.isPending}
