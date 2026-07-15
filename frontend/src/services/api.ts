@@ -45,7 +45,7 @@ export const opportunities = {
   update: (id: string, body: { notes?: string; risk_flag?: string; assigned_to?: string }) =>
     api.patch<Opportunity>(`/opportunities/${id}`, body),
   findContact: (id: string) =>
-    api.post<Opportunity>(`/opportunities/${id}/find-contact`),
+    api.post<{ opportunity: Opportunity; contacts_added: number }>(`/opportunities/${id}/find-contact`),
   markContacted: (id: string, body: { version: number; contact_id?: string; note?: string; changed_by?: string }) =>
     api.post<Opportunity>(`/opportunities/${id}/mark-contacted`, body),
   getAudit: (id: string) =>

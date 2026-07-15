@@ -121,7 +121,7 @@ export default function LeadsPage() {
                         </div>
                       </div>
                     ) : (
-                      <span className="inline-flex items-center gap-1.5 text-amber-300 text-xs"><RefreshCcw className="w-3.5 h-3.5" />Find contact</span>
+                      <button onClick={() => setSelectedOpp(opp)} className="inline-flex items-center gap-1.5 text-amber-300 text-xs hover:text-amber-200 transition-colors"><RefreshCcw className="w-3.5 h-3.5" />Find contact</button>
                     )}
                   </td>
                   <td className="px-4 py-3 align-top">

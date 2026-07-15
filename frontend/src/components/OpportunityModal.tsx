@@ -103,11 +103,27 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
   });
 
 
+  const [findContactFeedback, setFindContactFeedback] = useState<string | null>(null);
+  const [showManualGuidance, setShowManualGuidance] = useState(false);
+
   const findContactMutation = useMutation({
     mutationFn: () => opportunities.findContact(opp.id),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      const added = res.data.contacts_added;
+      if (added > 0) {
+        setFindContactFeedback(`Found ${added} contact${added !== 1 ? 's' : ''}`);
+        setShowManualGuidance(false);
+      } else {
+        setFindContactFeedback('No contacts found in Tenders-SA');
+        setShowManualGuidance(true);
+      }
       queryClient.invalidateQueries({ queryKey: ['leads'] });
-      queryClient.invalidateQueries({ queryKey: ['opportunities'] });
+      queryClient.invalidateQueries({ queryKey: ['opportunities', opp.id] });
+      setTimeout(() => setFindContactFeedback(null), 6000);
+    },
+    onError: () => {
+      setFindContactFeedback('Contact lookup failed');
+      setTimeout(() => setFindContactFeedback(null), 6000);
     },
   });
 
@@ -156,9 +172,17 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
               disabled={findContactMutation.isPending}
               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded bg-surface-300 text-gray-300 hover:text-white hover:bg-surface-400 transition-colors disabled:opacity-50"
             >
-              <RefreshCcw className="w-3.5 h-3.5" />
-              Find Contact
+              <RefreshCcw className={`w-3.5 h-3.5 ${findContactMutation.isPending ? 'animate-spin' : ''}`} />
+              {findContactMutation.isPending ? 'Searching...' : 'Find Contact'}
             </button>
+            {findContactFeedback && (
+              <span className={`text-xs font-medium ${
+                findContactFeedback.includes('No') || findContactFeedback.includes('failed')
+                  ? 'text-amber-400' : 'text-emerald-400'
+              }`}>
+                {findContactFeedback}
+              </span>
+            )}
             <button onClick={onClose} className="p-1 hover:bg-surface-300 rounded-lg transition-colors">
               <X className="w-5 h-5 text-gray-400" />
             </button>
@@ -492,6 +516,19 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
                   Cancel
                 </button>
               </div>
+            </div>
+          )}
+
+          {showManualGuidance && (
+            <div className="mb-3 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg text-xs text-amber-300 space-y-1.5">
+              <p className="font-medium">No contacts found automatically.</p>
+              <p>Try searching for this company on Google, LinkedIn, or their website to find contact details, then use the <strong>Add Contact</strong> form below to record them.</p>
+              <button
+                onClick={() => setShowManualGuidance(false)}
+                className="text-gray-400 hover:text-gray-200 underline"
+              >
+                Dismiss
+              </button>
             </div>
           )}
 

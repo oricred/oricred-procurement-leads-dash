@@ -317,13 +317,14 @@ async def _read_opportunity_with_context(opp: Opportunity, db: AsyncSession) -> 
     return _opportunity_to_read(opp, tender, award, company, contacts, buyer_org_name, category_name)
 
 
-@router.post("/{opportunity_id}/find-contact", response_model=OpportunityRead)
+@router.post("/{opportunity_id}/find-contact")
 async def find_opportunity_contact(opportunity_id: str, db: AsyncSession = Depends(get_db)):
     try:
-        opp, _added = await retry_contact_lookup_for_opportunity(opportunity_id, db)
+        opp, added = await retry_contact_lookup_for_opportunity(opportunity_id, db)
     except ValueError:
         raise HTTPException(status_code=404, detail="Opportunity not found")
-    return await _read_opportunity_with_context(opp, db)
+    opportunity = await _read_opportunity_with_context(opp, db)
+    return {"opportunity": opportunity.model_dump(), "contacts_added": added}
 
 
 @router.post("/{opportunity_id}/mark-contacted", response_model=OpportunityRead)
