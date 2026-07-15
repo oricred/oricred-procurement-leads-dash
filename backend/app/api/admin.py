@@ -179,6 +179,7 @@ async def trigger_job(job_name: str, background_tasks: BackgroundTasks, db: Asyn
         "sync_crm": "app.jobs.crm_sync:sync_crm",
         "contact_enrichment": "app.jobs.contact_enrichment:run_contact_enrichment",
         "historical_contacts": "app.jobs.historical_contacts:sync_historical_contacts_job",
+        "backfill_tenders": "app.jobs.tender_backfill:backfill_stub_tenders",
     }
     import_path = handlers.get(job_name)
     if not import_path:

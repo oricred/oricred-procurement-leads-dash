@@ -37,6 +37,7 @@ from app.services.qualification import QualificationService
 from app.services.award_timing import AwardTimingService
 from app.services.municipal_scraper import CityOfCapeTownAdapter, CityOfJoburgAdapter
 from app.services.admin_config import get_config
+from app.services.text_utils import best_title
 
 logger = structlog.get_logger()
 
@@ -52,6 +53,7 @@ TENDER_FIELDS = [
     "tender_id", "title", "description", "estimated_value", "province",
     "category_id", "closing_date", "source_organization_id",
     "source_organization", "type", "publication_date",
+    "ai_title_enriched",
 ]
 TENDER_INGEST_PAGE_SIZE = 1_000
 TENDER_INGEST_MAX_PAGES = 20
@@ -76,7 +78,7 @@ async def _process_tender(raw: dict, db, now: datetime) -> int:
     tender = Tender(
         api_id=api_id,
         raw_payload=_sanitize(raw),
-        title=raw.get("title", "Untitled"),
+        title=best_title(raw),
         description=raw.get("description"),
         estimated_value=raw.get("estimated_value"),
         province=raw.get("province"),

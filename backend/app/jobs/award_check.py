@@ -45,6 +45,7 @@ from app.services.email_alert import EmailAlertService
 from app.services.funding_suitability import compute_funding_suitability
 from app.services.lead_scoring import refresh_lead_scoring
 from app.services.lead_service import retry_contact_lookup_for_opportunity, retry_new_lead_contact_lookups
+from app.services.text_utils import best_title
 from app.workflow import WORKFLOW_STAGES
 
 logger = structlog.get_logger()
@@ -54,9 +55,10 @@ AWARD_FIELDS = [
     "bee_level", "bee_points", "supplier_canonical_id",
 ]
 TENDER_FIELDS = [
-    "tender_id", "title", "description", "estimated_value", "province",
+    "id", "tender_id", "title", "description", "estimated_value", "province",
     "category_id", "closing_date", "source_organization_id",
     "source_organization", "type", "publication_date",
+    "ai_title_enriched",
 ]
 COMPANY_FIELDS = [
     "id", "name", "registration_number", "bbbee_level",
@@ -124,19 +126,30 @@ async def _upsert_awarded_company(db, raw: dict, company_by_name: dict[str, dict
 
 async def _upsert_tender_for_award(db, raw: dict, metadata: dict | None, now: datetime) -> Tender | None:
     """Ensure every imported award has local tender context without gating ingestion."""
-    tender_api_id = raw.get("tender_id")
-    if not tender_api_id:
+    award_tender_id = raw.get("tender_id")
+    if not award_tender_id:
         logger.warning("award_without_tender_id", award_id=raw.get("id"))
         return None
 
-    tender = (await db.execute(select(Tender).where(Tender.api_id == tender_api_id))).scalar_one_or_none()
     metadata = metadata or {}
+    biz_tender_id = metadata.get("tender_id")
     buyer_org_id = metadata.get("source_organization_id")
+
+    tender = None
+    # Look up by business ID first (matching discovery job's api_id scheme)
+    if biz_tender_id:
+        tender = (await db.execute(select(Tender).where(Tender.api_id == biz_tender_id))).scalar_one_or_none()
     if not tender:
+        # Fallback: look up by UUID (the award's tender_id = TSA DB t.id)
+        tender = (await db.execute(select(Tender).where(Tender.api_id == award_tender_id))).scalar_one_or_none()
+
+    if not tender:
+        api_id = biz_tender_id or award_tender_id
+        tender_title = best_title(metadata) if metadata else f"Awarded tender {api_id}"
         tender = Tender(
-            api_id=tender_api_id,
-            raw_payload=_sanitize(metadata) or {"source": "award_ingestion", "award_id": raw.get("id")},
-            title=metadata.get("title") or f"Awarded tender {tender_api_id}",
+            api_id=api_id,
+            raw_payload=_sanitize(metadata) or {"source": "award_ingestion", "award_id": raw.get("id"), "tender_uuid": award_tender_id},
+            title=tender_title,
             description=metadata.get("description"),
             estimated_value=metadata.get("estimated_value"),
             province=metadata.get("province"),
@@ -151,7 +164,7 @@ async def _upsert_tender_for_award(db, raw: dict, metadata: dict | None, now: da
         await db.flush()
     elif metadata:
         tender.raw_payload = _sanitize(metadata)
-        tender.title = metadata.get("title") or tender.title
+        tender.title = best_title(metadata) or tender.title
         tender.description = metadata.get("description") or tender.description
         tender.estimated_value = metadata.get("estimated_value") or tender.estimated_value
         tender.province = metadata.get("province") or tender.province
@@ -260,10 +273,10 @@ async def check_awards_for_watching(backfill: bool = False):
             if tender_api_ids:
                 try:
                     raw_tenders = await tsa_db.query_tenders(
-                        filters={"tender_ids": tender_api_ids}, fields=TENDER_FIELDS,
+                        filters={"ids": tender_api_ids}, fields=TENDER_FIELDS,
                         limit=max(len(tender_api_ids), 1),
                     )
-                    tender_by_api_id = {str(tender["tender_id"]): tender for tender in raw_tenders if tender.get("tender_id")}
+                    tender_by_api_id = {str(tender["id"]): tender for tender in raw_tenders if tender.get("id")}
                 except Exception as exc:
                     logger.warning("award_tender_context_query_failed", error=str(exc))
 

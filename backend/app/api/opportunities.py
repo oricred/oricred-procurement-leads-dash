@@ -49,7 +49,7 @@ async def _load_opportunity_contacts(opp: Opportunity, db: AsyncSession) -> list
     return [ContactRead.model_validate(c) for c in contacts]
 
 
-def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: Award | None = None, company: Company | None = None, contacts: list[ContactRead] | None = None) -> OpportunityRead:
+def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: Award | None = None, company: Company | None = None, contacts: list[ContactRead] | None = None, buyer_org_name: str | None = None) -> OpportunityRead:
     days_since = None
     if award and award.award_date:
         days_since = (datetime.now(timezone.utc) - award.award_date).days
@@ -61,7 +61,7 @@ def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: 
         company_id=str(opp.company_id) if opp.company_id else None,
         company_name=company.name if company else award.supplier_name if award else None,
         award_value=award.amount if award else None,
-        buyer_org=tender.buyer_org_id if tender else None,
+        buyer_org=buyer_org_name or (tender.buyer_org_id if tender else None),
         province=tender.province if tender else None,
         category=tender.category_id if tender else None,
         kanban_stage=normalize_stage(opp.kanban_stage) or opp.kanban_stage,
@@ -130,8 +130,15 @@ async def list_opportunities(
             c_result = await db.execute(select(Company).where(Company.id == opp.company_id))
             company = c_result.scalar_one_or_none()
 
+        buyer_org_name = None
+        if tender and tender.buyer_org_id:
+            o_result = await db.execute(select(Organization).where(Organization.id == tender.buyer_org_id))
+            org = o_result.scalar_one_or_none()
+            if org:
+                buyer_org_name = org.name
+
         contacts = await _load_opportunity_contacts(opp, db)
-        items.append(_opportunity_to_read(opp, tender, award, company, contacts))
+        items.append(_opportunity_to_read(opp, tender, award, company, contacts, buyer_org_name))
 
     return OpportunityList(items=items, total=len(items))
 
@@ -218,8 +225,15 @@ async def get_opportunity(opportunity_id: str, db: AsyncSession = Depends(get_db
         c_result = await db.execute(select(Company).where(Company.id == opp.company_id))
         company = c_result.scalar_one_or_none()
 
+    buyer_org_name = None
+    if tender and tender.buyer_org_id:
+        o_result = await db.execute(select(Organization).where(Organization.id == tender.buyer_org_id))
+        org = o_result.scalar_one_or_none()
+        if org:
+            buyer_org_name = org.name
+
     contacts = await _load_opportunity_contacts(opp, db)
-    return _opportunity_to_read(opp, tender, award, company, contacts)
+    return _opportunity_to_read(opp, tender, award, company, contacts, buyer_org_name)
 
 
 @router.patch("/{opportunity_id}/stage", response_model=OpportunityRead)
@@ -272,8 +286,15 @@ async def _read_opportunity_with_context(opp: Opportunity, db: AsyncSession) -> 
     tender = await db.get(Tender, opp.tender_id) if opp.tender_id else None
     award = await db.get(Award, opp.award_id) if opp.award_id else None
     company = await db.get(Company, opp.company_id) if opp.company_id else None
+
+    buyer_org_name = None
+    if tender and tender.buyer_org_id:
+        org = await db.get(Organization, tender.buyer_org_id)
+        if org:
+            buyer_org_name = org.name
+
     contacts = await _load_opportunity_contacts(opp, db)
-    return _opportunity_to_read(opp, tender, award, company, contacts)
+    return _opportunity_to_read(opp, tender, award, company, contacts, buyer_org_name)
 
 
 @router.post("/{opportunity_id}/find-contact", response_model=OpportunityRead)
@@ -380,19 +401,28 @@ async def get_opportunity_relationship(opportunity_id: str, db: AsyncSession = D
         t_result = await db.execute(select(Tender).where(Tender.id == opp.tender_id))
         tender = t_result.scalar_one_or_none()
 
-    if not tender or not tender.buyer_org_id:
+    buyer_org_id = tender.buyer_org_id if tender else None
+
+    # Fallback: try to get buyer_org from the linked award
+    if not buyer_org_id and opp.award_id:
+        a_result = await db.execute(select(Award).where(Award.id == opp.award_id))
+        award = a_result.scalar_one_or_none()
+        if award and award.buyer_org_id:
+            buyer_org_id = award.buyer_org_id
+
+    if not buyer_org_id:
         return None
 
     org_result = await db.execute(
-        select(Organization).where(Organization.id == tender.buyer_org_id)
+        select(Organization).where(Organization.id == buyer_org_id)
     )
     org = org_result.scalar_one_or_none()
     if not org:
         return None
 
-    rel = await get_relationship(opp.company_id, org.id, db)
+    rel = await get_relationship(opp.company_id, buyer_org_id, db)
     if not rel:
-        rel = await compute_relationship(opp.company_id, org.id, db)
+        rel = await compute_relationship(opp.company_id, buyer_org_id, db)
         await db.commit()
 
     if not rel:

@@ -31,6 +31,9 @@ TENDER_FIELD_MAP: dict[str, str] = {
     "buyer_org_id": "t.source_organization_id",
     "buyer_name": "t.source_organization",
     "category_id": "tc.canonical_name",
+    "ai_title_enriched": "t.ai_title_enriched",
+    "ai_title_fixed": "t.ai_title_fixed",
+    "ai_confidence": "t.ai_confidence",
 }
 
 AWARD_FIELD_MAP: dict[str, str] = {
@@ -133,6 +136,11 @@ def _build_tender_where(filters: dict[str, Any] | None) -> tuple[str, dict[str, 
         return "", {}
     clauses: list[str] = []
     params: dict[str, Any] = {}
+
+    ids = filters.get("ids")
+    if ids:
+        clauses.append("t.id = ANY(:ids)")
+        params["ids"] = ids if isinstance(ids, list) else [ids]
 
     tender_ids = filters.get("tender_ids")
     if tender_ids:
