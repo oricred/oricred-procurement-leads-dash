@@ -1,5 +1,6 @@
 from app.models.tender import Tender
 from app.models.award import Award
+from app.models.award_ingestion_state import AwardIngestionState
 from app.models.company import Company
 from app.models.organization import Organization
 from app.models.category import Category
@@ -19,6 +20,7 @@ from app.models.historical_contact import HistoricalContact
 __all__ = [
     "Tender",
     "Award",
+    "AwardIngestionState",
     "Company",
     "Organization",
     "Category",
@@ -36,4 +38,3 @@ __all__ = [
     "Contact",
     "HistoricalContact",
 ]
-

@@ -85,20 +85,19 @@ The **Watching Page** displays:
 - Status labels: "On Track" (before window), "Approaching Window", "Past Due"
 - A countdown until the expected award date
 
-### 3. Award Detection (Hourly)
+### 3. Award Ingestion (Every 30 Minutes)
 
-The `check_awards_for_watching` job polls the Tenders-SA API for awards linked to watching tenders. When an award is found, it:
+The `check_awards_for_watching` job ingests the actual Tenders-SA award feed independently of the tender watchlist. Its first run reads the previous 30 days; thereafter it resumes from the latest successfully ingested award timestamp.
 
-1. Fetches **company intelligence** (BEE level, CIPC forensic risk score) via `GET /companies/{id}` and `GET /match`
-2. Fetches **buyer organization contacts** via `GET /organizations/{id}`
-3. Classifies **contact sufficiency**: `sufficient` (named official, ≥70% confidence), `role_based` (generic inbox), or `none`
-4. Gathers **competitor intelligence** — pre-close via `GET /companies/top` (speculative), at-close via `GET /tenders/{id}/bidders` (confirmed)
-5. Checks the **known-supplier short-circuit** (database + forensic match for restricted suppliers)
-6. Creates an **Opportunity** record (stage: "New")
-7. Sends an **email alert** to configured recipients
+For every source award it:
 
-If a watching tender passes its expected window end without an award, it enters the **Past-Due Queue**. Sustained past-due volume activates Phase 1B (SOE portal checking + OCPO Gazette PDF parsing).
+1. Upserts the tender context when it is available; a minimal tender record is retained if the source award arrives before tender metadata.
+2. Enriches the supplier, buyer, and bidder context where available.
+3. Upserts the award and creates the related opportunity if no lead exists yet.
+4. Marks a matching watched tender as awarded, but never requires a watchlist match to ingest the award.
+5. Sends an award alert and queues contact/CRM enrichment for new leads.
 
+Watched tenders remain useful for timing and Past-Due monitoring. A watched tender only becomes Past Due when its expected window has elapsed and there is no locally ingested award for it.
 ### 4. Opportunity Pipeline
 
 Awarded suppliers enter the current lead workflow:
@@ -251,7 +250,7 @@ The system uses 14 tables:
 | Job | Schedule | Description |
 |---|---|---|
 | `discover_new_tenders` | Every 15 minutes | Polls `/tenders/new`, runs qualification filter, adds to watchlist |
-| `check_awards_for_watching` | Hourly | Checks awards for watching tenders in their window; creates opportunities; transitions to past-due |
+| `check_awards_for_watching` | Every 30 minutes | Incrementally ingests Tenders-SA awards; watches provide optional award and past-due context |
 | `refresh_timing_model` | Weekly (Sun 2am) | Recomputes award-timing model from historical data |
 
 All jobs log execution results to the `job_runs` table.

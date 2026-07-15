@@ -21,7 +21,7 @@ scheduler: AsyncIOScheduler | None = None
 JobHandler = Callable[[], Awaitable[object | None]]
 JOB_HANDLERS: dict[str, tuple[str, JobHandler]] = {
     "discover_tenders": ("Discover new tenders", discover_new_tenders),
-    "check_awards": ("Check awards for watching tenders", check_awards_for_watching),
+    "check_awards": ("Ingest Tenders-SA awards", check_awards_for_watching),
     "refresh_timing_model": ("Refresh award timing model", refresh_timing_model),
     "sync_crm": ("Sync CRM activity", sync_crm),
     "contact_enrichment": ("Enrich contacts from TSA DB", run_contact_enrichment),

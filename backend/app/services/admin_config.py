@@ -73,7 +73,7 @@ DEFAULT_SCORING = {
 
 DEFAULT_JOBS = {
     "discover_tenders": {"enabled": True, "cron": "*/15 * * * *", "description": "Poll Tenders-SA for new tenders"},
-    "check_awards": {"enabled": True, "cron": "*/30 * * * *", "description": "Check awards for watching tenders"},
+    "check_awards": {"enabled": True, "cron": "*/30 * * * *", "description": "Ingest Tenders-SA awards incrementally"},
     "refresh_timing_model": {"enabled": True, "cron": "0 2 * * 0", "description": "Recompute award-timing model"},
     "sync_crm": {"enabled": True, "cron": "30 * * * *", "description": "Sync CRM activity from Monday.com"},
     "contact_enrichment": {"enabled": True, "cron": "0 3 * * 1,4", "description": "Enrich contacts from Tenders-SA"},

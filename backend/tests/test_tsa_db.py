@@ -38,6 +38,11 @@ class TestBuildTenderWhere:
         assert where == ""
         assert params == {}
 
+    def test_tender_ids_filter(self):
+        where, params = _build_tender_where({"tender_ids": ["tender-1", "tender-2"]})
+        assert "t.tender_id = ANY(:tender_ids)" in where
+        assert params["tender_ids"] == ["tender-1", "tender-2"]
+
     def test_province_filter(self):
         where, params = _build_tender_where({"province": ["Gauteng", "Western Cape"]})
         assert "LOWER(t.province) = ANY(:province)" in where

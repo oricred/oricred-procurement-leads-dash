@@ -45,7 +45,8 @@ export default function AwardsPage() {
     { key: 'supplier', label: 'Supplier', type: 'text', placeholder: 'Search supplier' },
     { key: 'buyer_org_id', label: 'Buyer', type: 'select', options: orgs?.map(o => ({ label: o.name, value: o.id })) ?? [] },
     { key: 'date_from', label: 'From', type: 'date' }, { key: 'date_to', label: 'To', type: 'date' },
-    { key: 'value_min', label: 'Min value', type: 'number' }, { key: 'source', label: 'Source', type: 'select', options: [{ label: 'Tenders-SA', value: 'tenders_api' }, { label: 'Municipal', value: 'municipal' }] },
+    { key: 'value_min', label: 'Min value', type: 'number' }, { key: 'source', label: 'All sources', type: 'select', options: [{ label: 'Tenders-SA', value: 'tenders_api' }, { label: 'Municipal', value: 'municipal' }] },
+    { key: 'watch_context', label: 'All awards', type: 'select', options: [{ label: 'From watched tender', value: 'watched' }, { label: 'Not from watched tender', value: 'not_watched' }] },
     { key: 'has_opportunity', label: 'Lead created', type: 'toggle' },
   ];
   const columns: ColumnDef[] = useMemo<ColumnDef[]>(() => [

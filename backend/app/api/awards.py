@@ -12,6 +12,7 @@ from app.models.award import Award
 from app.models.company import Company
 from app.models.contact import Contact
 from app.models.opportunity import Opportunity
+from app.models.watchlist import WatchlistItem
 from app.models.organization import Organization
 from app.models.tender import Tender
 from app.schemas.award import AwardItem, AwardsList
@@ -33,16 +34,18 @@ def _query_awards():
             Award, Organization.name.label("buyer_org_name"), Tender.title.label("tender_title"),
             Opportunity.id.label("opportunity_id"), Opportunity.kanban_stage.label("lead_stage"),
             Opportunity.contact_sufficiency.label("contact_readiness"), Company.id.label("company_id"),
+            WatchlistItem.id.label("watchlist_id"),
         )
         .outerjoin(Tender, Award.tender_id == Tender.id)
         .outerjoin(Organization, Award.buyer_org_id == Organization.id)
         .outerjoin(Company, Award.supplier_company_id == Company.api_id)
         .outerjoin(Opportunity, Opportunity.award_id == Award.id)
+        .outerjoin(WatchlistItem, WatchlistItem.tender_id == Award.tender_id)
     )
 
 
 def _filter_awards(query, supplier=None, buyer_org_id=None, date_from=None, date_to=None,
-                   value_min=None, value_max=None, source=None, has_opportunity=None):
+                   value_min=None, value_max=None, source=None, has_opportunity=None, watch_context=None):
     if supplier:
         query = query.where(Award.supplier_name.ilike(f"%{supplier}%"))
     if buyer_org_id:
@@ -61,6 +64,10 @@ def _filter_awards(query, supplier=None, buyer_org_id=None, date_from=None, date
         query = query.where(Opportunity.id.isnot(None))
     elif has_opportunity is False:
         query = query.where(Opportunity.id.is_(None))
+    if watch_context == "watched":
+        query = query.where(WatchlistItem.id.isnot(None))
+    elif watch_context == "not_watched":
+        query = query.where(WatchlistItem.id.is_(None))
     return query
 
 
@@ -94,11 +101,11 @@ async def list_awards(
     supplier: str | None = None, buyer_org_id: str | None = None,
     date_from: date | None = None, date_to: date | None = None,
     value_min: float | None = None, value_max: float | None = None, source: str | None = None,
-    has_opportunity: bool | None = None, sort: str = "award_date", direction: str = "desc",
+    has_opportunity: bool | None = None, watch_context: str | None = Query(None, pattern="^(watched|not_watched|all)?$"), sort: str = "award_date", direction: str = "desc",
     page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
-    query = _filter_awards(_query_awards(), supplier, buyer_org_id, date_from, date_to, value_min, value_max, source, has_opportunity)
+    query = _filter_awards(_query_awards(), supplier, buyer_org_id, date_from, date_to, value_min, value_max, source, has_opportunity, watch_context)
     total = await db.scalar(select(func.count()).select_from(query.subquery())) or 0
     order = SORT_FIELDS.get(sort, Award.award_date)
     query = query.order_by(order.asc().nulls_last() if direction == "asc" else order.desc().nulls_last())
@@ -111,10 +118,10 @@ async def export_awards(
     supplier: str | None = None, buyer_org_id: str | None = None,
     date_from: date | None = None, date_to: date | None = None,
     value_min: float | None = None, value_max: float | None = None, source: str | None = None,
-    has_opportunity: bool | None = None, sort: str = "award_date", direction: str = "desc",
+    has_opportunity: bool | None = None, watch_context: str | None = Query(None, pattern="^(watched|not_watched|all)?$"), sort: str = "award_date", direction: str = "desc",
     db: AsyncSession = Depends(get_db),
 ):
-    query = _filter_awards(_query_awards(), supplier, buyer_org_id, date_from, date_to, value_min, value_max, source, has_opportunity)
+    query = _filter_awards(_query_awards(), supplier, buyer_org_id, date_from, date_to, value_min, value_max, source, has_opportunity, watch_context)
     order = SORT_FIELDS.get(sort, Award.award_date)
     rows = await db.execute(query.order_by(order.asc().nulls_last() if direction == "asc" else order.desc().nulls_last()))
     stream = io.StringIO()

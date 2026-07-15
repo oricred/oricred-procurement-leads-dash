@@ -134,6 +134,11 @@ def _build_tender_where(filters: dict[str, Any] | None) -> tuple[str, dict[str, 
     clauses: list[str] = []
     params: dict[str, Any] = {}
 
+    tender_ids = filters.get("tender_ids")
+    if tender_ids:
+        clauses.append("t.tender_id = ANY(:tender_ids)")
+        params["tender_ids"] = tender_ids if isinstance(tender_ids, list) else [tender_ids]
+
     provinces = filters.get("province")
     if provinces:
         if isinstance(provinces, list):
@@ -490,6 +495,7 @@ class TSADatabase:
         filters: dict[str, Any] | None = None,
         fields: list[str] | None = None,
         limit: int = 1000,
+        direction: str = "desc",
     ) -> list[dict[str, Any]]:
         select_cols = _map_fields(AWARD_FIELD_MAP, fields)
         where, params, join_clause = _build_award_where(filters)
@@ -500,7 +506,7 @@ class TSADatabase:
             FROM tender_awards a
             {join_clause}
             {where}
-            ORDER BY a.award_date DESC NULLS LAST
+            ORDER BY a.award_date {"ASC" if direction.lower() == "asc" else "DESC"} NULLS LAST
             LIMIT :limit
         """
         async with self._session_factory() as session:
@@ -673,6 +679,3 @@ class TSADatabase:
             result = await session.execute(text(sql))
             rows = result.mappings().all()
             return [dict(row) for row in rows]
-
-
-

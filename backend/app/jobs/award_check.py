@@ -1,25 +1,26 @@
 import hashlib
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import structlog
 from sqlalchemy import select
 
 from app.clients import TSADatabase
 from app.database import async_session
-from app.models.watchlist import WatchlistItem
-from app.models.tender import Tender
 from app.models.award import Award
+from app.models.award_ingestion_state import AwardIngestionState
 from app.models.company import Company
-from app.models.organization import Organization
 from app.models.opportunity import Opportunity
+from app.models.organization import Organization
 from app.models.past_due import PastDueQueue
-from app.services.email_alert import EmailAlertService
+from app.models.tender import Tender
+from app.models.watchlist import WatchlistItem
 from app.services.buyer_preference import compute_buyer_preference
+from app.services.crm.sync import push_opportunity_to_crm
+from app.services.email_alert import EmailAlertService
 from app.services.funding_suitability import compute_funding_suitability
 from app.services.lead_scoring import refresh_lead_scoring
 from app.services.lead_service import retry_contact_lookup_for_opportunity, retry_new_lead_contact_lookups
-from app.services.crm.sync import push_opportunity_to_crm
 from app.workflow import WORKFLOW_STAGES
 
 logger = structlog.get_logger()
@@ -28,21 +29,48 @@ AWARD_FIELDS = [
     "id", "tender_id", "supplier_name", "amount", "award_date",
     "bee_level", "bee_points", "supplier_canonical_id",
 ]
-
+TENDER_FIELDS = [
+    "tender_id", "title", "description", "estimated_value", "province",
+    "category_id", "closing_date", "source_organization_id",
+    "source_organization", "type", "publication_date",
+]
 COMPANY_FIELDS = [
     "id", "name", "registration_number", "bbbee_level",
     "contact_email", "contact_phone", "website",
 ]
-
 ORGANIZATION_FIELDS = [
     "id", "name", "organization_type", "contact_email", "contact_phone",
     "website", "confidence_score", "contact_email_is_role_based",
 ]
 
+# Award publication may be delayed or corrected by a source. Re-reading this
+# window makes the ingestion idempotent while keeping the scheduled query bounded.
+AWARD_INGEST_LOOKBACK_DAYS = 30
+AWARD_INGEST_LIMIT = 5_000
+
 
 def _supplier_fallback_api_id(supplier: str) -> str:
     digest = hashlib.sha1(supplier.strip().lower().encode("utf-8")).hexdigest()[:32]
     return f"award:{digest}"
+
+
+def _award_api_id(raw: dict) -> str:
+    if raw.get("id"):
+        return str(raw["id"])
+    identity = "|".join(str(raw.get(key) or "") for key in ("tender_id", "supplier_name", "award_date", "amount"))
+    return f"award:{hashlib.sha1(identity.encode('utf-8')).hexdigest()[:32]}"
+
+
+def _award_timestamp(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
 
 
 async def _upsert_awarded_company(db, raw: dict, company_by_name: dict[str, dict], now: datetime) -> Company:
@@ -69,217 +97,246 @@ async def _upsert_awarded_company(db, raw: dict, company_by_name: dict[str, dict
     return company
 
 
+async def _upsert_tender_for_award(db, raw: dict, metadata: dict | None, now: datetime) -> Tender | None:
+    """Ensure every imported award has local tender context without gating ingestion."""
+    tender_api_id = raw.get("tender_id")
+    if not tender_api_id:
+        logger.warning("award_without_tender_id", award_id=raw.get("id"))
+        return None
+
+    tender = (await db.execute(select(Tender).where(Tender.api_id == tender_api_id))).scalar_one_or_none()
+    metadata = metadata or {}
+    buyer_org_id = metadata.get("source_organization_id")
+    if not tender:
+        tender = Tender(
+            api_id=tender_api_id,
+            raw_payload=metadata or {"source": "award_ingestion", "award_id": raw.get("id")},
+            title=metadata.get("title") or f"Awarded tender {tender_api_id}",
+            description=metadata.get("description"),
+            estimated_value=metadata.get("estimated_value"),
+            province=metadata.get("province"),
+            category_id=metadata.get("category_id"),
+            closing_date=metadata.get("closing_date"),
+            buyer_org_id=buyer_org_id,
+            tender_type=metadata.get("type"),
+            published_at=metadata.get("publication_date"),
+            discovered_at=now,
+        )
+        db.add(tender)
+        await db.flush()
+    elif metadata:
+        tender.raw_payload = metadata
+        tender.title = metadata.get("title") or tender.title
+        tender.description = metadata.get("description") or tender.description
+        tender.estimated_value = metadata.get("estimated_value") or tender.estimated_value
+        tender.province = metadata.get("province") or tender.province
+        tender.category_id = metadata.get("category_id") or tender.category_id
+        tender.closing_date = metadata.get("closing_date") or tender.closing_date
+        tender.buyer_org_id = buyer_org_id or tender.buyer_org_id
+        tender.tender_type = metadata.get("type") or tender.tender_type
+        tender.published_at = metadata.get("publication_date") or tender.published_at
+    return tender
+
+
+async def _upsert_buyer_organization(db, tsa_db: TSADatabase, tender: Tender, now: datetime) -> None:
+    if not tender.buyer_org_id:
+        return
+    try:
+        org_results = await tsa_db.query_organizations(
+            filters={"ids": [tender.buyer_org_id]}, fields=ORGANIZATION_FIELDS,
+        )
+        if not org_results:
+            return
+        org = org_results[0]
+        await db.merge(Organization(
+            id=tender.buyer_org_id,
+            name=org.get("name", tender.buyer_org_id),
+            organization_type=org.get("organization_type"),
+            contact_email=org.get("contact_email"),
+            contact_phone=org.get("contact_phone"),
+            contact_website=org.get("website"),
+            contact_email_is_role_based=org.get("contact_email_is_role_based"),
+            confidence_score=org.get("confidence_score"),
+            raw_payload=org,
+            last_refreshed_at=now,
+        ))
+    except Exception as exc:
+        logger.warning("buyer_org_upsert_failed", tender_id=tender.api_id, error=str(exc))
+
+
+async def _mark_overdue_watches(db, email: EmailAlertService, now: datetime) -> None:
+    rows = await db.execute(
+        select(WatchlistItem, Tender)
+        .join(Tender, WatchlistItem.tender_id == Tender.id)
+        .where(
+            WatchlistItem.status == "watching",
+            WatchlistItem.expected_window_end.isnot(None),
+            WatchlistItem.expected_window_end < now,
+        )
+    )
+    for watch, tender in rows.all():
+        has_award = await db.scalar(select(Award.id).where(Award.tender_id == tender.id).limit(1))
+        if has_award:
+            watch.status = "awarded"
+            watch.awarded_at = now
+            continue
+        watch.status = "past_due"
+        watch.past_due_at = now
+        existing = await db.execute(select(PastDueQueue).where(PastDueQueue.tender_id == tender.id))
+        if existing.scalar_one_or_none():
+            continue
+        db.add(PastDueQueue(tender_id=tender.id, entered_queue_at=now))
+        await email.send(
+            "past_due", "ops@oricred.com", tender_title=tender.title,
+            buyer_org=tender.buyer_org_id or "", category=tender.category_id or "",
+            window_start=str(watch.expected_window_start), window_end=str(watch.expected_window_end),
+            days_overdue=str((now - watch.expected_window_end).days), dashboard_url="/watchlist",
+        )
+
+
 async def check_awards_for_watching():
+    """Ingest Tenders-SA awards regardless of watchlist membership.
+
+    A watchlist match only updates that tender's monitoring state; it never filters
+    the award feed or prevents an awarded supplier from becoming a lead.
+    """
     tsa_db = TSADatabase()
     email = EmailAlertService()
-    logger.info("job_started", job="check_awards")
+    logger.info("job_started", job="ingest_awards")
 
     try:
         async with async_session() as db:
             now = datetime.now(timezone.utc)
             new_opportunity_ids: list[str] = []
-
-            result = await db.execute(
-                select(WatchlistItem, Tender)
-                .join(Tender, WatchlistItem.tender_id == Tender.id)
-                .where(WatchlistItem.status == "watching")
-            )
-            rows = result.all()
-
-            if not rows:
-                retry_processed = await retry_new_lead_contact_lookups(limit=100)
-                logger.info("award_check_no_watching", contact_retry_processed=retry_processed)
-                return
-
-            wl_by_api_id = {tender.api_id: (wl, tender) for wl, tender in rows}
-            tender_api_ids = list(wl_by_api_id.keys())
-
+            ingested_award_timestamps: list[datetime] = []
+            state = await db.get(AwardIngestionState, "tenders_sa")
+            since = state.latest_award_at if state and state.latest_award_at else now - timedelta(days=AWARD_INGEST_LOOKBACK_DAYS)
             try:
                 raw_awards = await tsa_db.query_awards(
-                    filters={"tender_ids": tender_api_ids},
+                    filters={"since": since.isoformat()},
                     fields=AWARD_FIELDS,
+                    limit=AWARD_INGEST_LIMIT,
+                    direction="asc",
                 )
-            except Exception as e:
-                logger.error("batch_award_query_failed", error=str(e))
+            except Exception as exc:
+                logger.error("award_ingestion_query_failed", error=str(exc))
                 raw_awards = []
 
-            awards_by_tender: dict[str, list[dict]] = defaultdict(list)
-            for aw in raw_awards:
-                tid = aw.get("tender_id")
-                if tid:
-                    awards_by_tender[tid].append(aw)
-
-            all_suppliers = list({aw.get("supplier_name") for aw in raw_awards if aw.get("supplier_name")})
-            company_by_name: dict[str, dict] = {}
-
-            if all_suppliers:
+            tender_api_ids = list({str(raw["tender_id"]) for raw in raw_awards if raw.get("tender_id")})
+            tender_by_api_id: dict[str, dict] = {}
+            if tender_api_ids:
                 try:
-                    raw_companies = await tsa_db.query_companies(
-                        filters={"names": all_suppliers},
-                        fields=COMPANY_FIELDS,
+                    raw_tenders = await tsa_db.query_tenders(
+                        filters={"tender_ids": tender_api_ids}, fields=TENDER_FIELDS,
+                        limit=max(len(tender_api_ids), 1),
                     )
-                    for co in raw_companies:
-                        name = co.get("name", "")
-                        company_by_name[name] = co
-                        company_by_name[name.strip().lower()] = co
-                except Exception as e:
-                    logger.warning("batch_company_query_failed", error=str(e))
+                    tender_by_api_id = {str(tender["tender_id"]): tender for tender in raw_tenders if tender.get("tender_id")}
+                except Exception as exc:
+                    logger.warning("award_tender_context_query_failed", error=str(exc))
+
+            company_by_name: dict[str, dict] = {}
+            suppliers = list({raw.get("supplier_name") for raw in raw_awards if raw.get("supplier_name")})
+            if suppliers:
+                try:
+                    for company in await tsa_db.query_companies(filters={"names": suppliers}, fields=COMPANY_FIELDS):
+                        name = company.get("name", "")
+                        company_by_name[name] = company
+                        company_by_name[name.strip().lower()] = company
+                except Exception as exc:
+                    logger.warning("batch_company_query_failed", error=str(exc))
 
             bidders_by_tender: dict[str, list[str]] = defaultdict(list)
-            try:
-                raw_bidders = await tsa_db.query_bidders(tender_ids=tender_api_ids)
-                for b in raw_bidders:
-                    tid = b.get("tender_id")
-                    name = b.get("name")
-                    if tid and name:
-                        bidders_by_tender[tid].append(name)
-            except Exception as e:
-                logger.warning("batch_bidder_query_failed", error=str(e))
+            if tender_api_ids:
+                try:
+                    for bidder in await tsa_db.query_bidders(tender_ids=tender_api_ids):
+                        if bidder.get("tender_id") and bidder.get("name"):
+                            bidders_by_tender[str(bidder["tender_id"])].append(bidder["name"])
+                except Exception as exc:
+                    logger.warning("batch_bidder_query_failed", error=str(exc))
 
-            for wl, tender in rows:
-                matched_awards = awards_by_tender.get(tender.api_id, [])
+            for raw in raw_awards:
+                tender = await _upsert_tender_for_award(db, raw, tender_by_api_id.get(str(raw.get("tender_id"))), now)
+                if not tender:
+                    continue
+                company = await _upsert_awarded_company(db, raw, company_by_name, now)
+                supplier = raw.get("supplier_name", "Unknown")
+                await _upsert_buyer_organization(db, tsa_db, tender, now)
 
-                if matched_awards:
-                    for raw in matched_awards:
-                        supplier = raw.get("supplier_name", "Unknown")
-                        company = await _upsert_awarded_company(db, raw, company_by_name, now)
+                award_api_id = _award_api_id(raw)
+                award = (await db.execute(select(Award).where(Award.api_id == award_api_id))).scalar_one_or_none()
+                if not award:
+                    award = Award(api_id=award_api_id, tender_id=tender.id, supplier_name=supplier, source="tenders_api", discovered_at=now)
+                    db.add(award)
+                    await db.flush()
+                award.tender_id = tender.id
+                award.raw_payload = raw
+                award.supplier_name = supplier
+                award.supplier_company_id = company.api_id
+                award.amount = raw.get("amount")
+                award.award_date = raw.get("award_date")
+                award.bee_level = raw.get("bee_level")
+                award.bee_points = raw.get("bee_points")
+                award.buyer_org_id = tender.buyer_org_id
+                timestamp = _award_timestamp(raw.get("award_date"))
+                if timestamp:
+                    ingested_award_timestamps.append(timestamp)
 
-                        if tender.buyer_org_id:
-                            try:
-                                org_results = await tsa_db.query_organizations(
-                                    filters={"ids": [tender.buyer_org_id]},
-                                    fields=ORGANIZATION_FIELDS,
-                                )
-                                if org_results:
-                                    org_data = org_results[0]
-                                    await db.merge(Organization(
-                                        id=tender.buyer_org_id,
-                                        name=org_data.get("name", tender.buyer_org_id),
-                                        organization_type=org_data.get("organization_type"),
-                                        contact_email=org_data.get("contact_email"),
-                                        contact_phone=org_data.get("contact_phone"),
-                                        contact_website=org_data.get("website"),
-                                        contact_email_is_role_based=org_data.get("contact_email_is_role_based"),
-                                        confidence_score=org_data.get("confidence_score"),
-                                        raw_payload=org_data,
-                                        last_refreshed_at=now,
-                                    ))
-                                    await db.flush()
-                            except Exception as e:
-                                logger.warning("buyer_org_upsert_failed", tender_id=tender.api_id, error=str(e))
+                # Watchlist matching happens after the Tenders-SA award was stored.
+                watch = (await db.execute(select(WatchlistItem).where(WatchlistItem.tender_id == tender.id, WatchlistItem.status == "watching"))).scalar_one_or_none()
+                if watch:
+                    watch.status = "awarded"
+                    watch.awarded_at = now
 
-                        award = None
-                        if raw.get("id"):
-                            existing_award = await db.execute(select(Award).where(Award.api_id == raw.get("id")))
-                            award = existing_award.scalar_one_or_none()
-                        if not award:
-                            award = Award(
-                                api_id=raw.get("id"),
-                                tender_id=tender.id,
-                                raw_payload=raw,
-                                supplier_name=supplier,
-                                supplier_company_id=company.api_id,
-                                amount=raw.get("amount"),
-                                award_date=raw.get("award_date"),
-                                bee_level=raw.get("bee_level"),
-                                bee_points=raw.get("bee_points"),
-                                buyer_org_id=tender.buyer_org_id,
-                                source="tenders_api",
-                                discovered_at=now,
-                            )
-                            db.add(award)
-                            await db.flush()
+                existing_opp = await db.execute(select(Opportunity).where(Opportunity.award_id == award.id))
+                if existing_opp.scalar_one_or_none():
+                    continue
+                opp = Opportunity(
+                    tender_id=tender.id, award_id=award.id, company_id=company.id,
+                    kanban_stage=WORKFLOW_STAGES[0], contact_sufficiency="none", risk_flag="green",
+                )
+                db.add(opp)
+                await db.flush()
+                opp.buyer_preference_score = await compute_buyer_preference(str(opp.id), db)
+                opp.funding_suitability = await compute_funding_suitability(company.id, db)
+                await refresh_lead_scoring(opp, db, tender=tender, award=award, company=company, contacts=[])
+                opp.related_bidders = [
+                    {"name": name, "inferred": False, "reason": "confirmed bidder"}
+                    for name in bidders_by_tender.get(tender.api_id, []) if name.lower() != supplier.lower()
+                ] or None
+                new_opportunity_ids.append(str(opp.id))
+                await email.send(
+                    "award_detected", "ops@oricred.com", company_name=supplier,
+                    tender_title=tender.title, supplier_name=supplier,
+                    amount=float(raw.get("amount", 0) or 0), award_date=str(raw.get("award_date", "")),
+                    dashboard_url="/opportunities/" + str(opp.id),
+                )
 
-                        existing_opp = await db.execute(select(Opportunity).where(Opportunity.award_id == award.id))
-                        if existing_opp.scalar_one_or_none():
-                            continue
-
-                        opp = Opportunity(
-                            tender_id=tender.id,
-                            award_id=award.id,
-                            company_id=company.id,
-                            kanban_stage=WORKFLOW_STAGES[0],
-                            contact_sufficiency="none",
-                            risk_flag="green",
-                        )
-                        db.add(opp)
-                        await db.flush()
-
-                        opp.buyer_preference_score = await compute_buyer_preference(str(opp.id), db)
-                        opp.funding_suitability = await compute_funding_suitability(company.id, db)
-                        await refresh_lead_scoring(opp, db, tender=tender, award=award, company=company, contacts=[])
-                        new_opportunity_ids.append(str(opp.id))
-
-                        related = []
-                        bidders = bidders_by_tender.get(tender.api_id, [])
-                        for bidder_name in bidders:
-                            if bidder_name.lower() != supplier.lower():
-                                related.append({
-                                    "name": bidder_name,
-                                    "inferred": False,
-                                    "reason": "confirmed bidder",
-                                })
-                        opp.related_bidders = related if related else None
-
-                        await email.send(
-                            "award_detected",
-                            "ops@oricred.com",
-                            company_name=supplier,
-                            tender_title=tender.title,
-                            supplier_name=supplier,
-                            amount=float(raw.get("amount", 0) or 0),
-                            award_date=str(raw.get("award_date", "")),
-                            dashboard_url="/opportunities/" + str(opp.id),
-                        )
-
-                    wl.status = "awarded"
-                    wl.awarded_at = now
-
-                elif wl.expected_window_end and now > wl.expected_window_end:
-                    wl.status = "past_due"
-                    wl.past_due_at = now
-                    existing = await db.execute(
-                        select(PastDueQueue).where(PastDueQueue.tender_id == tender.id)
-                    )
-                    if not existing.scalar_one_or_none():
-                        db.add(PastDueQueue(
-                            tender_id=tender.id,
-                            entered_queue_at=now,
-                        ))
-                        await email.send(
-                            "past_due",
-                            "ops@oricred.com",
-                            tender_title=tender.title,
-                            buyer_org=tender.buyer_org_id or "",
-                            category=tender.category_id or "",
-                            window_start=str(wl.expected_window_start),
-                            window_end=str(wl.expected_window_end),
-                            days_overdue=str((now - wl.expected_window_end).days),
-                            dashboard_url="/watchlist",
-                        )
-
+            await _mark_overdue_watches(db, email, now)
+            if ingested_award_timestamps:
+                latest_award_at = max(ingested_award_timestamps)
+                if not state:
+                    state = AwardIngestionState(source="tenders_sa", latest_award_at=latest_award_at)
+                    db.add(state)
+                elif not state.latest_award_at or latest_award_at > state.latest_award_at:
+                    state.latest_award_at = latest_award_at
             await db.commit()
 
             contacts_added = 0
-            for opp_id in new_opportunity_ids:
+            for opportunity_id in new_opportunity_ids:
                 try:
                     async with async_session() as lookup_db:
-                        _, added = await retry_contact_lookup_for_opportunity(opp_id, lookup_db, tsa_db)
+                        _, added = await retry_contact_lookup_for_opportunity(opportunity_id, lookup_db, tsa_db)
                         contacts_added += added
-                    await push_opportunity_to_crm(opp_id)
-                except Exception as e:
-                    logger.warning("lead_post_create_sync_failed", opportunity_id=opp_id, error=str(e))
+                    await push_opportunity_to_crm(opportunity_id)
+                except Exception as exc:
+                    logger.warning("lead_post_create_sync_failed", opportunity_id=opportunity_id, error=str(exc))
 
             retry_processed = await retry_new_lead_contact_lookups(limit=100)
-
             logger.info(
-                "award_check_complete",
-                checked=len(rows),
-                awards_found=len(raw_awards),
-                leads_created=len(new_opportunity_ids),
-                contacts_added=contacts_added,
+                "award_ingestion_complete", source="tenders_sa", since=since.isoformat(), awards_checked=len(raw_awards),
+                leads_created=len(new_opportunity_ids), contacts_added=contacts_added,
                 contact_retry_processed=retry_processed,
             )
-
+            return len(raw_awards)
     finally:
         await tsa_db.close()
