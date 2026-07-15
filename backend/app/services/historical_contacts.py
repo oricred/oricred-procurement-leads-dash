@@ -118,7 +118,7 @@ async def _company_lookup(tsa_db: TSADatabase, awards: list[dict[str, Any]]) -> 
 
 
 async def sync_historical_contacts(limit: int = 1000, cutoff_days: int = HISTORICAL_CUTOFF_DAYS) -> dict[str, int]:
-    cutoff = datetime.now(timezone.utc) - timedelta(days=cutoff_days)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=cutoff_days)
     tsa_db = TSADatabase()
     try:
         async with async_session() as db:
