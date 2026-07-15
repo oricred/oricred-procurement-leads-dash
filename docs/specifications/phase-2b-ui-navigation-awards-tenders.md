@@ -1,5 +1,7 @@
 # Phase 2b — UI Navigation, Awards Browser & Tenders Browser
 
+> **Status:** Historical spec document. The code is the source of truth. This phase is **fully implemented** — see `backend/app/api/awards.py`, `backend/app/api/tenders.py`, `frontend/src/pages/DiscoverPage.tsx`, and related files.
+
 **Status:** Approved for implementation
 **Depends on:** Phase 2 (municipalities + CRM) — uses the same data models and API layer
 

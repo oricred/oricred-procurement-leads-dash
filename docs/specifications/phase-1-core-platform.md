@@ -1,5 +1,7 @@
 # Phase 1 — Core Platform — Detailed Specification
 
+> **Status:** Historical spec document. The code is the source of truth. The actual implementation may differ from what's described here — always verify against the running code in `backend/` and `frontend/`.
+
 **Status:** Approved
 **Version:** 2.0 (detailed)
 

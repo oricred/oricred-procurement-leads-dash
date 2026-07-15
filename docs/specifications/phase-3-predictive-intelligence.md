@@ -1,5 +1,7 @@
 # Phase 3 — Predictive Procurement Intelligence
 
+> **Status:** Historical spec document. The code is the source of truth. This phase has **not** been implemented — it is deferred until ≥12 months of historical data has accumulated.
+
 **Status:** Approved specification (sequenced after Phase 2 — requires accumulated historical data from Phase 1 & 2 to be effective)
 
 ---

@@ -1,7 +1,9 @@
 # Spec Contract — Phase 2b: UI Navigation, Awards & Tenders
 
+> **Status:** Historical document. This contract is **fully implemented** and closed. The code is the source of truth.
+
 **Contract ID:** ORI-P2B-001
-**Status:** Active
+**Status:** Closed — Implemented
 **Date:** 2026-07-01
 **Specification:** `docs/specifications/phase-2b-ui-navigation-awards-tenders.md`
 

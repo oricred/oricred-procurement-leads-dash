@@ -1,5 +1,7 @@
 # Phase 1B — SOE / Gazette Gap-Fill
 
+> **Status:** Historical spec document. The code is the source of truth. This phase has **not** been implemented — it remains an aspirational spec awaiting activation by past-due queue volume.
+
 **Status:** Approved specification (sequenced after Phase 1, not parallel)
 
 **Activation condition:** Sustained, material rate of past-due tenders in the Past-Due Queue (§2/§6 of Phase 1). Operations team to monitor and signal go-ahead.

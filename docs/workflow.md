@@ -1,5 +1,7 @@
 # Oricred Lead Workflow
 
+> **Status:** This document is kept in sync with the code. If anything conflicts, the code in `backend/app/workflow.py` is the source of truth.
+
 **Status:** Current application contract · **Version:** 2.0 · **Updated:** 2026-07-15
 
 Oricred turns awarded procurement suppliers into funding leads. Awards remain the only lead source in this release; a lead carries its tender and award evidence throughout the workflow.

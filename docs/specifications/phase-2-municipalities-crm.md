@@ -1,5 +1,7 @@
 # Phase 2 — Municipalities & CRM Integration
 
+> **Status:** Historical spec document. The code is the source of truth. This phase is **substantially implemented** — see `backend/` and `frontend/` for the current state.
+
 **Status:** Approved specification (sequenced after Phase 1)
 
 ---

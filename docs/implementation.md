@@ -1,6 +1,8 @@
 # Oricred Procurement Intelligence Platform — Implementation Plan
 
-**Status:** Approved project. This document specifies what gets built, in what order, against the Tenders-SA.org Public API.
+> **Status:** Historical design document. The actual implementation may differ — the code is the source of truth.
+>
+> This document describes the original Phase 1 design intent. Post-Phase-1 additions (Phase 2, Phase 2b) are documented in their respective spec files and the actual code. See AGENTS.md for the current implementation status.
 
 **Scope of this build:** Tenders-SA API integration end-to-end. SOE internal-portal checks and OCPO Gazette PDF parsing are an explicit later phase (§6) — not because they're less important, but because they're triggered by data this build produces, so they're sequenced after it rather than alongside it.
 
@@ -75,6 +77,8 @@ Opportunity Card → Kanban pipeline (§7.1)
 New → Assigned → Contacted → In Discussion → Application Received → Funded/Closed
 ```
 
+> **Note:** The actual workflow has been expanded to 14 stages (`new_lead` → `funded`). See `backend/app/workflow.py` and `docs/workflow.md` for the current state machine.
+
 ---
 
 ## 4. Competitor Intelligence (Build Spec)
@@ -136,26 +140,37 @@ Tracked tenders between publication and award, with expected-award countdown fro
 
 ## 8. Build Sequence & Deliverables
 
-### Phase 1 — Core Platform
+### Phase 1 — Core Platform (Completed)
 - Tenders-SA API integration: tenders, awards, organizations, companies, forensic endpoints
-- Award-Timing Model (§2): baseline computation + weekly refresh job
-- Qualification filter engine (§5), config-driven
-- Kanban dashboard (§7): pipeline + radar + matching + awards/tenders browsers
-- Contact-sufficiency classifier (§1.1)
-- Known-supplier short-circuit for bidder resolution (§4)
+- Award-Timing Model: baseline computation + weekly refresh job
+- Qualification filter engine, config-driven
+- Kanban dashboard: pipeline + radar + matching
+- Contact-sufficiency classifier
+- Known-supplier short-circuit for bidder resolution
 - Email alerting
 
-### Phase 1B — SOE/Gazette Gap-Fill
-- Activated by Past-Due Queue volume (§6) — sequenced, not parallel
+### Phase 1B — SOE/Gazette Gap-Fill (Not started)
+- Activated by Past-Due Queue volume — sequenced, not parallel
 - SOE-portal targeted checks (per-organization, research-then-build)
 - OCPO Gazette microservice
 
-### Phase 2
-- Municipalities
-- Buyer-relationship analytics, CRM integration (funding-suitability scoring is largely pre-computable from existing `companies`/`awards` fields already consumed in Phase 1 — incremental, not new infrastructure)
+### Phase 2 — Municipalities & CRM (Completed)
+- Funding-suitability scoring
+- Buyer-relationship analytics, CRM integration
+- Municipal coverage (filter config + scraper stubs)
+- CRM sync with Monday.com
 
-### Phase 3
-- Predictive procurement intelligence, advanced relationship mapping
+### Phase 2b — UI Navigation, Awards & Tenders Browsers (Completed)
+- Navigation restructure: single-page Discover with tabs
+- Awards browser: filterable/paginated + CSV export + create-lead
+- Tenders browser: filterable/paginated + watch toggle + status badges
+- Historical contacts browser
+- Watchlist toggle endpoint
+- Reference endpoints (organizations, categories, provinces)
+- Reusable FilterBar + DataTable components
+
+### Phase 3 — Predictive Intelligence (Not started)
+- Deferred until ≥12 months of historical data accumulated
 
 ---
 
