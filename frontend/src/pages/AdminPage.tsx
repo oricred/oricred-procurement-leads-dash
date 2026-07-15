@@ -746,13 +746,45 @@ function JobsTab() {
 
   const triggerMutation = useMutation({
     mutationFn: (jobName: string) => admin.triggerJob(jobName),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-job-history'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-job-history'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+    },
   });
 
   const jobs = form as Record<string, { enabled: boolean; cron: string; description: string }>;
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold text-white mb-4">Scheduled Jobs</h2>
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-white">Scheduled Jobs</h2>
+          <p className="text-xs text-gray-500 mt-1">Manually run critical ingestion jobs or adjust their schedules.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => triggerMutation.mutate('check_awards')}
+            disabled={triggerMutation.isPending}
+            className="btn-primary px-3 py-2 rounded-lg text-sm inline-flex items-center gap-2"
+          >
+            <Play className="w-4 h-4" />
+            {triggerMutation.isPending ? 'Running...' : 'Ingest Awards Now'}
+          </button>
+          <button
+            type="button"
+            onClick={() => triggerMutation.mutate('historical_contacts')}
+            disabled={triggerMutation.isPending}
+            className="px-3 py-2 rounded-lg text-sm inline-flex items-center gap-2 bg-surface-300 text-gray-300 hover:text-white hover:bg-surface-400 transition-colors"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Historical Contacts
+          </button>
+        </div>
+      </div>
+      <div className="p-3 rounded-lg bg-surface-300/70 border border-surface-400 text-xs text-gray-400">
+        <span className="text-gray-200 font-medium">Ingest Awards Now</span> runs the same award ingestion used by the 30-minute schedule: it checks watched tenders for new awards, creates lead cards for awarded suppliers, and retries contact enrichment.
+      </div>
+      {triggerMutation.isError && <p className="text-red-400 text-sm">Job trigger failed.</p>}
       {isLoading ? <p className="text-gray-400">Loading...</p> : (
         <form onSubmit={e => { e.preventDefault(); saveMutation.mutate(form); }} className="space-y-4">
           {Object.entries(jobs).map(([key, job]) => (
@@ -828,7 +860,6 @@ function JobsTab() {
     </div>
   );
 }
-
 // ── Users Tab ──
 
 function UsersTab() {
