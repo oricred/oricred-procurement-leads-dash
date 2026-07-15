@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { TrendingUp, Columns, LogOut, Activity, Shield, Search, UsersRound } from 'lucide-react';
+import { TrendingUp, Columns, LogOut, Activity, Shield, Search, UsersRound, BookOpen } from 'lucide-react';
 import { auth, dashboard } from '../services/api';
 import { useState } from 'react';
 
@@ -54,6 +54,7 @@ export default function Layout() {
             { path: '/discover', label: 'Discover', icon: Search },
             { path: '/leads', label: 'Lead Inbox', icon: UsersRound },
             { path: '/pipeline', label: 'Deal Pipeline', icon: Columns },
+            { path: '/help', label: 'Help', icon: BookOpen },
             ...(isAdmin ? [{ path: '/admin', label: 'Admin', icon: Shield }] : []),          ].map(({ path, label, icon: Icon }) => (
             <NavLink
               key={path}
@@ -119,5 +120,3 @@ export default function Layout() {
     </div>
   );
 }
-
-

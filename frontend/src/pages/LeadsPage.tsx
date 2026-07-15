@@ -4,6 +4,7 @@ import { Mail, Phone, Search, UserRound, RefreshCcw, ArrowRightCircle } from 'lu
 import { leads } from '../services/api';
 import type { Opportunity } from '../types';
 import OpportunityModal from '../components/OpportunityModal';
+import HelpLink from '../components/HelpLink';
 
 function formatCurrency(value: number | null): string {
   if (!value) return '—';
@@ -55,7 +56,7 @@ export default function LeadsPage() {
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4">
         <div>
           <h2 className="text-lg font-semibold text-white">Lead Inbox</h2>
-          <p className="text-xs text-gray-500">Awarded companies ready for funding outreach</p>
+          <p className="text-xs text-gray-500">Awarded companies ready for funding outreach</p><HelpLink section="lead-inbox" />
         </div>
         <div className="flex items-center gap-2">
           <div className="relative">

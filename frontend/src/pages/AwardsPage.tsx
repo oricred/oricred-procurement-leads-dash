@@ -6,6 +6,7 @@ import { awardsApi, organizationsApi } from '../services/api';
 import type { AwardItem } from '../types';
 import FilterBar, { type FilterField } from '../components/FilterBar';
 import DataTable, { type ColumnDef } from '../components/DataTable';
+import HelpLink from '../components/HelpLink';
 
 const money = (v: number | null) => v == null ? '—' : new Intl.NumberFormat('en-ZA', { style: 'currency', currency: 'ZAR', notation: 'compact' }).format(v);
 const date = (v: string | null) => v ? new Date(v).toLocaleDateString('en-ZA') : '—';
@@ -51,7 +52,7 @@ export default function AwardsPage() {
   const toggleSort = () => { setDirection(d => sort === 'award_date' && d === 'desc' ? 'asc' : 'desc'); setSort('award_date'); };
   const exportCsv = () => window.open(awardsApi.exportUrl({ ...filters, sort, direction }), '_blank', 'noopener,noreferrer');
   return <div>
-    <div className="flex flex-wrap items-center gap-3 mb-4"><Award className="w-5 h-5 text-primary-400" /><div><h2 className="text-lg font-semibold text-white">Award intelligence</h2><p className="text-xs text-gray-500">Create outreach-ready leads from awarded suppliers.</p></div><span className="text-xs text-gray-500">{data?.total ?? 0} results</span><button onClick={toggleSort} className="ml-auto text-xs text-gray-400 hover:text-white">Sort award date {direction === 'desc' ? '↓' : '↑'}</button><button onClick={exportCsv} className="inline-flex gap-1 text-xs text-primary-400"><Download className="w-4 h-4" />CSV</button></div>
+    <div className="flex flex-wrap items-center gap-3 mb-4"><Award className="w-5 h-5 text-primary-400" /><div><h2 className="text-lg font-semibold text-white">Award intelligence</h2><p className="text-xs text-gray-500">Create outreach-ready leads from awarded suppliers.</p></div><span className="text-xs text-gray-500">{data?.total ?? 0} results</span><div className="ml-auto"><HelpLink section="discover" /></div><button onClick={toggleSort} className="text-xs text-gray-400 hover:text-white">Sort award date {direction === 'desc' ? '↓' : '↑'}</button><button onClick={exportCsv} className="inline-flex gap-1 text-xs text-primary-400"><Download className="w-4 h-4" />CSV</button></div>
     <FilterBar fields={fields} values={filters} onChange={(k, v) => { setFilters(f => ({ ...f, [k]: v })); setPage(1); }} onClear={() => { setFilters({}); setPage(1); }} />
     <details className="my-3 text-xs text-gray-500"><summary className="cursor-pointer">Columns</summary><div className="flex flex-wrap gap-3 mt-2">{['buyer_org_name','tender_title','bee_level','source','lead_state'].map(key => <label key={key}><input type="checkbox" checked={!hidden.includes(key)} onChange={() => setHidden(h => h.includes(key) ? h.filter(x => x !== key) : [...h, key])} /> {key.replace(/_/g, ' ')}</label>)}</div></details>
     {isError ? <div className="glass p-8 text-center text-red-400">Awards could not load. <button onClick={() => refetch()}>Retry</button></div> : <DataTable columns={columns} data={(data?.items ?? []) as unknown as Record<string, unknown>[]} page={page} pageSize={50} total={data?.total ?? 0} onPageChange={setPage} isLoading={isLoading} emptyMessage="No awards match these filters." />}
