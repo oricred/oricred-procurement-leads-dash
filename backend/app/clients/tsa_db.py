@@ -588,7 +588,6 @@ class TSADatabase:
             params["tender_ids"] = tender_ids
         sql += " ORDER BY b.name"
         params["limit"] = limit
-        params["offset"] = max(offset, 0)
         sql += " LIMIT :limit"
 
         async with self._session_factory() as session:
