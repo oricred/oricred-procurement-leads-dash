@@ -13,6 +13,8 @@ from app.api import router as api_router
 
 
 async def _ensure_admin_user():
+    if not settings.debug:
+        return
     async with async_session() as db:
         result = await db.execute(select(User).limit(1))
         if result.first():
@@ -32,7 +34,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     await _ensure_admin_user()
     from app.jobs.scheduler import start_scheduler
-    scheduler = start_scheduler()
+    scheduler = await start_scheduler()
     yield
     scheduler.shutdown(wait=False)
 

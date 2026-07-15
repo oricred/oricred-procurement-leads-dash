@@ -39,7 +39,7 @@ export default function AwardRadar() {
           <Activity className="w-4 h-4 text-primary-400" />
           <h3 className="text-sm font-semibold text-gray-200">Recent Awards</h3>
           <button
-            onClick={() => navigate('/awards')}
+            onClick={() => navigate('/discover?tab=awards')}
             className="ml-auto flex items-center gap-1 text-[11px] text-primary-400 hover:text-primary-300 transition-colors"
           >
             View All <ExternalLink className="w-3 h-3" />
@@ -55,7 +55,7 @@ export default function AwardRadar() {
             data?.awards.map((award) => (
               <button
                 key={award.id}
-                onClick={() => navigate(`/awards?supplier=${encodeURIComponent(award.supplier_name)}`)}
+                onClick={() => navigate(`/discover?tab=awards&supplier=${encodeURIComponent(award.supplier_name)}`)}
                 className="w-full text-left bg-surface-300 rounded-lg p-3 border border-surface-400 card-hover"
               >
                 <p className="text-xs font-medium text-gray-200 truncate">{award.tender_title}</p>

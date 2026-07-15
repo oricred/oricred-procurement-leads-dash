@@ -16,10 +16,17 @@ export default function AwardsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [page, setPage] = useState(Number(params.get('page') || 1));
-  const [filters, setFilters] = useState<Record<string, string>>(() => Object.fromEntries([...params].filter(([key]) => !['page', 'sort', 'direction'].includes(key))));
+  const [filters, setFilters] = useState<Record<string, string>>(() => Object.fromEntries([...params].filter(([key]) => !['tab', 'page', 'sort', 'direction'].includes(key))));
   const [sort, setSort] = useState(params.get('sort') || 'award_date');
   const [direction, setDirection] = useState(params.get('direction') || 'desc');
   const [hidden, setHidden] = useState<string[]>([]);
+  useEffect(() => {
+    const nextFilters = Object.fromEntries([...params].filter(([key]) => !['tab', 'page', 'sort', 'direction'].includes(key)));
+    setFilters(current => JSON.stringify(current) === JSON.stringify(nextFilters) ? current : nextFilters);
+    setPage(Number(params.get('page') || 1));
+    setSort(params.get('sort') || 'award_date');
+    setDirection(params.get('direction') || 'desc');
+  }, [params]);
 
   useEffect(() => {
     const next = new URLSearchParams(filters);

@@ -190,7 +190,7 @@ async def discover_new_tenders():
                         continue
                     if not adapter_cls:
                         continue
-                    adapter = adapter_cls()
+                    adapter = adapter_cls(src_config_section.get("base_url") or None)
                     try:
                         results = await adapter.get_new_tenders(source_since)
                         for res in results:

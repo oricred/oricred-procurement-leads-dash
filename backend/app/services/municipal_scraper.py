@@ -45,13 +45,14 @@ class MunicipalPortalAdapter(ABC):
 class CityOfCapeTownAdapter(MunicipalPortalAdapter):
     BASE_URL = "https://web1.capetown.gov.za/web1/tenderportal"
 
-    def __init__(self) -> None:
+    def __init__(self, base_url: str | None = None) -> None:
+        self.base_url = base_url or self.BASE_URL
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
-                base_url=self.BASE_URL,
+                base_url=self.base_url,
                 timeout=30.0,
                 follow_redirects=True,
                 headers={"User-Agent": "Oricred/1.0"},
@@ -168,13 +169,14 @@ class CityOfCapeTownAdapter(MunicipalPortalAdapter):
 class CityOfJoburgAdapter(MunicipalPortalAdapter):
     BASE_URL = "https://coj-prod-fbdjhcbbezcbeeeu.a03.azurefd.net"
 
-    def __init__(self) -> None:
+    def __init__(self, base_url: str | None = None) -> None:
+        self.base_url = base_url or self.BASE_URL
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
-                base_url=self.BASE_URL,
+                base_url=self.base_url,
                 timeout=30.0,
                 follow_redirects=True,
                 headers={"User-Agent": "Oricred/1.0"},

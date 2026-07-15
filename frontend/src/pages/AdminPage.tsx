@@ -475,7 +475,8 @@ function SourcesTab() {
       <h2 className="text-lg font-semibold text-white mb-4">Data Sources</h2>
 
       <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wide">Municipal Portals</h3>
-      {metros && Object.entries(metros).map(([key, metro]) => (
+      <p className="text-xs text-gray-500">Only sources with a maintained ingestion adapter can be enabled.</p>
+      {metros && Object.entries(metros).filter(([key]) => ['joburg', 'capetown'].includes(key)).map(([key, metro]) => (
         <div key={key} className="p-4 bg-surface-300 rounded-lg space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-sm font-medium text-white">{metro.name}</label>
@@ -500,7 +501,8 @@ function SourcesTab() {
       ))}
 
       <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wide mt-6">API Sources</h3>
-      {apiSources && Object.entries(apiSources).map(([key, src]) => (
+      <p className="text-xs text-gray-500">Tenders-SA is ingested through the configured direct database connection. Additional API adapters are not exposed until implemented.</p>
+      {apiSources && Object.entries(apiSources).filter(() => false).map(([key, src]) => (
         <div key={key} className="p-4 bg-surface-300 rounded-lg space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-sm font-medium text-white">{src.name}</label>

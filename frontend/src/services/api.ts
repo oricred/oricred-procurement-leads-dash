@@ -29,6 +29,7 @@ export const auth = {
   login: (email: string, password: string) =>
     api.post<{ access_token: string }>('/auth/login', { email, password }),
   me: () => api.get<{ id: string; email: string; name: string; role: string }>('/auth/me'),
+  assignees: () => api.get<Array<{ id: string; name: string; email: string }>>('/auth/assignees'),
 };
 
 export const opportunities = {
@@ -41,7 +42,7 @@ export const opportunities = {
   transition: (id: string, body: { action: string; version: number; changed_by?: string; lost_reason?: string; credit_decision?: string; confirm?: boolean; conditions_checklist?: Array<Record<string, unknown>> }) =>
     api.post<Opportunity>(`/opportunities/${id}/transition`, body),  assign: (id: string, assignee: string) =>
     api.patch(`/opportunities/${id}/assign`, null, { params: { assignee } }),
-  update: (id: string, body: { notes?: string; risk_flag?: string }) =>
+  update: (id: string, body: { notes?: string; risk_flag?: string; assigned_to?: string }) =>
     api.patch<Opportunity>(`/opportunities/${id}`, body),
   findContact: (id: string) =>
     api.post<Opportunity>(`/opportunities/${id}/find-contact`),
@@ -188,5 +189,3 @@ export const crmActivity = {
       `/opportunities/${opportunityId}/crm-activity`
     ),
 };
-
-

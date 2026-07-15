@@ -99,19 +99,18 @@ The `check_awards_for_watching` job polls the Tenders-SA API for awards linked t
 
 If a watching tender passes its expected window end without an award, it enters the **Past-Due Queue**. Sustained past-due volume activates Phase 1B (SOE portal checking + OCPO Gazette PDF parsing).
 
-### 4. Opportunity Pipeline (Kanban Board)
+### 4. Opportunity Pipeline
 
-Opportunities flow through a 7-stage drag-and-drop kanban:
+Awarded suppliers enter the current lead workflow:
 
 ```
-New → Assigned → Contacted → In Discussion → Application Received → Funded → Closed
+New Lead → Client Contacted → Qualified Lead → Won Opportunity
+→ Credit Preparation → Credit Review → Pre-Approved
+→ Conditions Precedent → Term Sheet Sent → Term Sheet Received
+→ Contracts Sent → Contracts Received → Ready to RFF → Funded
 ```
 
-- **Stage transitions** use optimistic concurrency (version field) to prevent conflicts
-- All transitions are **audit-logged** in the `opportunity_audit` table
-- Each card displays: contact sufficiency status, risk flag, formatted value, buyer org, category, days since award
-- Clicking a card opens a **detail modal** with four panels: Award Detail, Company Intelligence, Contact Info, Scoring
-
+A lead may be moved to **Lost Lead** from any active stage with a recorded reason. All forward movement is deliberate from the opportunity panel; contact, credit approval, cleared conditions, backward moves, reopening, and every stage transition are audit logged.
 ### Award Radar (Side Panel)
 
 The **Award Radar** is a live-updating side panel showing:

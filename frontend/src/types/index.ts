@@ -231,6 +231,7 @@ export interface AuditEntry {
 export interface PastDueEntry {
   id: string;
   tender_id: string;
+  opportunity_id: string | null;
   tender_title: string;
   estimated_value: number | null;
   province: string | null;
@@ -247,6 +248,3 @@ export interface User {
   name: string;
   role: string;
 }
-
-
-

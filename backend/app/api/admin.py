@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -142,6 +142,8 @@ async def get_jobs(db: AsyncSession = Depends(get_db)):
 @router.put("/jobs")
 async def update_jobs(body: dict, db: AsyncSession = Depends(get_db), current_user: dict = Depends(_require_admin)):
     await save_config("admin_jobs", body, current_user["user_id"], db)
+    from app.jobs.scheduler import reload_scheduler
+    await reload_scheduler()
     return {"status": "ok"}
 
 
@@ -168,13 +170,14 @@ async def get_job_history(limit: int = 50, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/jobs/{job_name}/trigger")
-async def trigger_job(job_name: str, db: AsyncSession = Depends(get_db), current_user: dict = Depends(_require_admin)):
+async def trigger_job(job_name: str, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db), current_user: dict = Depends(_require_admin)):
     from app.jobs.scheduler import run_job
     handlers = {
         "discover_tenders": "app.jobs.discovery:discover_new_tenders",
         "check_awards": "app.jobs.award_check:check_awards_for_watching",
         "refresh_timing_model": "app.jobs.model_refresh:refresh_timing_model",
         "sync_crm": "app.jobs.crm_sync:sync_crm",
+        "contact_enrichment": "app.jobs.contact_enrichment:run_contact_enrichment",
         "historical_contacts": "app.jobs.historical_contacts:sync_historical_contacts_job",
     }
     import_path = handlers.get(job_name)
@@ -186,8 +189,8 @@ async def trigger_job(job_name: str, db: AsyncSession = Depends(get_db), current
     module = importlib.import_module(module_path)
     handler = getattr(module, func_name)
 
-    await run_job(job_name, handler)
-    return {"status": "triggered", "job": job_name}
+    background_tasks.add_task(run_job, job_name, handler)
+    return {"status": "accepted", "job": job_name}
 
 
 # ── Users ──
@@ -312,5 +315,3 @@ async def retry_failed_api_call(call_id: str, db: AsyncSession = Depends(get_db)
         )
     finally:
         await client.close()
-
-

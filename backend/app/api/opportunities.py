@@ -6,12 +6,14 @@ from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.api.auth import get_current_user
 from app.models.opportunity import Opportunity, OpportunityAudit
 from app.models.award import Award
 from app.models.tender import Tender
 from app.models.company import Company
 from app.models.organization import Organization
 from app.models.contact import Contact
+from app.models.user import User
 from app.schemas.opportunity import OpportunityRead, OpportunityStageUpdate, OpportunityUpdate, OpportunityList, AuditEntry, OpportunityContactedUpdate, OpportunityTransition
 from app.schemas.contact import ContactRead
 from app.schemas.buyer_relationship import BuyerRelationshipRead
@@ -137,6 +139,7 @@ async def list_opportunities(
 @router.post("/{opportunity_id}/transition", response_model=OpportunityRead)
 async def transition_opportunity(
     opportunity_id: str, body: OpportunityTransition, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     opp = await db.get(Opportunity, opportunity_id)
     if not opp:
@@ -162,6 +165,8 @@ async def transition_opportunity(
             raise HTTPException(status_code=400, detail="This stage cannot move backward")
         new_stage = previous[old_stage]
     elif action == "advance":
+        if old_stage == "new_lead":
+            raise HTTPException(status_code=400, detail="Use mark-contacted to advance a new lead")
         new_stage = WORKFLOW_NEXT.get(old_stage)
         if not new_stage:
             raise HTTPException(status_code=400, detail="This stage cannot advance")
@@ -187,7 +192,7 @@ async def transition_opportunity(
         opp.closed_at = datetime.now(timezone.utc)
     elif action == "reopen":
         opp.closed_at = None
-    db.add(OpportunityAudit(opportunity_id=opp.id, from_stage=old_stage, to_stage=new_stage, changed_by=body.changed_by or "system"))
+    db.add(OpportunityAudit(opportunity_id=opp.id, from_stage=old_stage, to_stage=new_stage, changed_by=current_user["name"]))
     await db.commit()
     await db.refresh(opp)
     await push_opportunity_to_crm(opportunity_id)
@@ -285,6 +290,7 @@ async def mark_contacted(
     opportunity_id: str,
     body: OpportunityContactedUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     try:
         opp = await mark_opportunity_contacted(
@@ -293,7 +299,7 @@ async def mark_contacted(
             db=db,
             contact_id=body.contact_id,
             note=body.note,
-            changed_by=body.changed_by or "system",
+            changed_by=current_user["name"],
         )
     except ValueError:
         raise HTTPException(status_code=404, detail="Opportunity not found")
@@ -303,14 +309,17 @@ async def mark_contacted(
     return await _read_opportunity_with_context(opp, db)
 
 @router.patch("/{opportunity_id}/assign")
-async def assign_opportunity(opportunity_id: str, assignee: str, db: AsyncSession = Depends(get_db)):
+async def assign_opportunity(opportunity_id: str, assignee: str, db: AsyncSession = Depends(get_db), _: dict = Depends(get_current_user)):
     result = await db.execute(
         select(Opportunity).where(Opportunity.id == opportunity_id)
     )
     opp = result.scalar_one_or_none()
     if not opp:
         raise HTTPException(status_code=404, detail="Opportunity not found")
-    opp.assigned_to = assignee
+    target = await db.get(User, assignee) if assignee else None
+    if assignee and (not target or not target.is_active):
+        raise HTTPException(status_code=400, detail="Assignee must be an active user")
+    opp.assigned_to = str(target.id) if target else None
     opp.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await push_opportunity_to_crm(opportunity_id)
@@ -318,7 +327,7 @@ async def assign_opportunity(opportunity_id: str, assignee: str, db: AsyncSessio
 
 
 @router.patch("/{opportunity_id}", response_model=OpportunityRead)
-async def update_opportunity(opportunity_id: str, body: OpportunityUpdate, db: AsyncSession = Depends(get_db)):
+async def update_opportunity(opportunity_id: str, body: OpportunityUpdate, db: AsyncSession = Depends(get_db), _: dict = Depends(get_current_user)):
     result = await db.execute(select(Opportunity).where(Opportunity.id == opportunity_id))
     opp = result.scalar_one_or_none()
     if not opp:
@@ -330,7 +339,13 @@ async def update_opportunity(opportunity_id: str, body: OpportunityUpdate, db: A
             raise HTTPException(status_code=400, detail="Invalid risk_flag")
         opp.risk_flag = body.risk_flag
     if body.assigned_to is not None:
-        opp.assigned_to = body.assigned_to
+        if not body.assigned_to:
+            opp.assigned_to = None
+        else:
+            assignee = await db.get(User, body.assigned_to)
+            if not assignee or not assignee.is_active:
+                raise HTTPException(status_code=400, detail="Assignee must be an active user")
+            opp.assigned_to = str(assignee.id)
     opp.updated_at = datetime.now(timezone.utc)
     opp.version += 1
     await db.commit()
@@ -484,6 +499,3 @@ async def get_crm_activity(opportunity_id: str, db: AsyncSession = Depends(get_d
             })
 
     return {"activities": filtered[:20]}
-
-
-

@@ -24,16 +24,8 @@ DEFAULT_SOURCES = {
     "metros": {
         "joburg": {"enabled": True, "base_url": "https://coj-prod-fbdjhcbbezcbeeeu.a03.azurefd.net", "province": "gp", "name": "City of Johannesburg"},
         "capetown": {"enabled": True, "base_url": "https://web1.capetown.gov.za/web1/tenderportal", "province": "wc", "name": "City of Cape Town"},
-        "ethekwini": {"enabled": False, "base_url": "", "province": "kzn", "name": "eThekwini (Durban)"},
-        "ekurhuleni": {"enabled": False, "base_url": "", "province": "gp", "name": "City of Ekurhuleni"},
-        "tshwane": {"enabled": False, "base_url": "", "province": "gp", "name": "City of Tshwane"},
-        "nelsonmandelabay": {"enabled": False, "base_url": "", "province": "ec", "name": "Nelson Mandela Bay"},
     },
-    "api_sources": {
-        "ocpo": {"enabled": False, "base_url": "https://ocpo.gov.za/api", "api_key": "", "name": "OCPO — Office of the Chief Procurement Officer"},
-        "etenders": {"enabled": False, "base_url": "https://etenders.treasury.gov.za/api", "api_key": "", "name": "e-Tenders Portal"},
-        "tsa_ocp": {"enabled": False, "base_url": "https://api.tenders-sa.org/ocp", "api_key": "", "name": "Tenders-SA OCP API"},
-    },
+    "api_sources": {},
 }
 
 DEFAULT_NOTIFICATIONS = {
@@ -84,6 +76,7 @@ DEFAULT_JOBS = {
     "check_awards": {"enabled": True, "cron": "*/30 * * * *", "description": "Check awards for watching tenders"},
     "refresh_timing_model": {"enabled": True, "cron": "0 2 * * 0", "description": "Recompute award-timing model"},
     "sync_crm": {"enabled": True, "cron": "30 * * * *", "description": "Sync CRM activity from Monday.com"},
+    "contact_enrichment": {"enabled": True, "cron": "0 3 * * 1,4", "description": "Enrich contacts from Tenders-SA"},
     "historical_contacts": {"enabled": True, "cron": "30 2 * * *", "description": "Import historical awarded companies and contacts"},
 }
 
@@ -140,5 +133,3 @@ async def get_all_configs(db: AsyncSession) -> dict:
             defaults, _ = CONFIG_DEFAULTS.get(key, ({}, ""))
             configs[key] = dict(defaults)
     return configs
-
-

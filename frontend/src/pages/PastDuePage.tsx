@@ -1,8 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { Clock, AlertTriangle, Building2, MapPin, DollarSign } from 'lucide-react';
 import { pastDueQueue } from '../services/api';
 
 export default function PastDuePage() {
+  const navigate = useNavigate();
   const { data, isLoading } = useQuery({
     queryKey: ['past-due'],
     queryFn: async () => {
@@ -70,6 +72,11 @@ export default function PastDuePage() {
                   <Clock className="w-3 h-3" />
                   <span>{item.days_in_queue}d in queue</span>
                 </div>
+              </div>
+              <div className="mt-3 flex justify-end">
+                <button onClick={() => navigate(item.opportunity_id ? `/pipeline?open=${item.opportunity_id}` : `/discover?tab=tenders&status=past_due`)} className="text-xs text-primary-400 hover:text-primary-300">
+                  {item.opportunity_id ? 'Open lead' : 'View tender queue'}
+                </button>
               </div>
             </div>
           ))}

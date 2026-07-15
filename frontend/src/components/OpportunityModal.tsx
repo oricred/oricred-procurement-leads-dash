@@ -1,15 +1,22 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { X, Building2, Award, Users, FileText, TrendingUp, BarChart3, Activity, History, Edit2, Phone, Mail, Linkedin, Star, Plus, Trash2, RefreshCcw, CheckCircle2 } from 'lucide-react';
-import { opportunities, buyerRelationships, crmActivity, contacts as contactsApi } from '../services/api';
+import { auth, opportunities, buyerRelationships, crmActivity, contacts as contactsApi } from '../services/api';
 import type { Opportunity, Contact } from '../types';
+import WorkflowActions from './WorkflowActions';
 
 interface Props {
   opportunity: Opportunity;
   onClose: () => void;
 }
 
-export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
+export default function OpportunityModal({ opportunity: initialOpportunity, onClose }: Props) {
+  const { data: latestOpportunity } = useQuery({
+    queryKey: ['opportunity', initialOpportunity.id],
+    queryFn: async () => (await opportunities.get(initialOpportunity.id)).data,
+    initialData: initialOpportunity,
+  });
+  const opp = latestOpportunity ?? initialOpportunity;
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -45,6 +52,10 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
   };
 
   const queryClient = useQueryClient();
+  const { data: assignees = [] } = useQuery({
+    queryKey: ['assignees'],
+    queryFn: async () => (await auth.assignees()).data,
+  });
   const [editingNotes, setEditingNotes] = useState(false);
   const [notesDraft, setNotesDraft] = useState(opp.notes ?? '');
   const [showAddContact, setShowAddContact] = useState(false);
@@ -100,38 +111,8 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
     },
   });
 
-  const markContactedMutation = useMutation({
-    mutationFn: () => opportunities.markContacted(opp.id, {
-      version: opp.version,
-      contact_id: opp.primary_contact?.id,
-      changed_by: 'user',
-    }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['leads'] });
-      queryClient.invalidateQueries({ queryKey: ['opportunities'] });
-      queryClient.invalidateQueries({ queryKey: ['opportunity-audit', opp.id] });
-    },
-  });
-  const transitionMutation = useMutation({
-    mutationFn: (body: { action: string; version: number; lost_reason?: string; credit_decision?: string; confirm?: boolean; conditions_checklist?: Array<Record<string, unknown>> }) => opportunities.transition(opp.id, body),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['opportunities'] });
-      queryClient.invalidateQueries({ queryKey: ['leads'] });
-      queryClient.invalidateQueries({ queryKey: ['opportunity-audit', opp.id] });
-    },
-  });
-  const advance = () => {
-    const body: { action: string; version: number; credit_decision?: string; conditions_checklist?: Array<Record<string, unknown>> } = { action: 'advance', version: opp.version };
-    if (opp.kanban_stage === 'credit_review') body.credit_decision = window.prompt('Credit decision: type approved to continue') ?? '';
-    if (opp.kanban_stage === 'conditions_precedent') {
-      const raw = window.prompt('Conditions checklist JSON. Every item must include "cleared": true.', JSON.stringify(opp.conditions_checklist ?? []));
-      try { body.conditions_checklist = raw ? JSON.parse(raw) : []; } catch { return; }
-    }
-    transitionMutation.mutate(body);
-  };
-  const decline = () => { const lost_reason = window.prompt('Why was this lead lost or declined?'); if (lost_reason) transitionMutation.mutate({ action: 'decline', version: opp.version, lost_reason }); };
   const updateMutation = useMutation({
-    mutationFn: (body: { notes?: string; risk_flag?: string }) => opportunities.update(opp.id, body),
+    mutationFn: (body: { notes?: string; risk_flag?: string; assigned_to?: string }) => opportunities.update(opp.id, body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['opportunity', opp.id] });
       setEditingNotes(false);
@@ -169,8 +150,7 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={advance} disabled={transitionMutation.isPending || ['funded', 'lost_lead'].includes(opp.kanban_stage)} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50">Advance</button>
-            <button onClick={decline} disabled={transitionMutation.isPending || ['funded', 'lost_lead'].includes(opp.kanban_stage)} className="px-2.5 py-1.5 text-xs rounded text-red-300 hover:bg-red-500/10 disabled:opacity-50">Decline</button>
+            <WorkflowActions opportunity={opp} />
             <button
               onClick={() => findContactMutation.mutate()}
               disabled={findContactMutation.isPending}
@@ -178,14 +158,6 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
             >
               <RefreshCcw className="w-3.5 h-3.5" />
               Find Contact
-            </button>
-            <button
-              onClick={() => markContactedMutation.mutate()}
-              disabled={markContactedMutation.isPending || opp.kanban_stage === 'client_contacted'}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded bg-primary-600 text-white hover:bg-primary-500 transition-colors disabled:opacity-50"
-            >
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              Mark Contacted
             </button>
             <button onClick={onClose} className="p-1 hover:bg-surface-300 rounded-lg transition-colors">
               <X className="w-5 h-5 text-gray-400" />
@@ -264,10 +236,18 @@ export default function OpportunityModal({ opportunity: opp, onClose }: Props) {
                   {sufficiencyIcons[opp.contact_sufficiency ?? 'none']} {opp.contact_sufficiency}
                 </span>
               </div>
-              <div className="flex justify-between">
+              <label className="flex items-center justify-between gap-3">
                 <span className="text-gray-500">Assigned</span>
-                <span className="text-gray-200">{opp.assigned_to ?? 'Unassigned'}</span>
-              </div>
+                <select value={opp.assigned_to ?? ''} onChange={event => updateMutation.mutate({ assigned_to: event.target.value })} className="max-w-[160px] rounded bg-surface-300 px-2 py-1 text-xs text-gray-200">
+                  <option value="">Unassigned</option>{assignees.map(user => <option key={user.id} value={user.id}>{user.name}</option>)}
+                </select>
+              </label>
+              <label className="flex items-center justify-between gap-3">
+                <span className="text-gray-500">Risk</span>
+                <select value={opp.risk_flag ?? ''} onChange={event => updateMutation.mutate({ risk_flag: event.target.value })} className="rounded bg-surface-300 px-2 py-1 text-xs text-gray-200">
+                  <option value="">No flag</option><option value="green">Green</option><option value="amber">Amber</option><option value="red">Red</option>
+                </select>
+              </label>
               {(() => {
                 const primary = opp.contacts.find(c => c.is_primary);
                 if (!primary) return null;
