@@ -1,7 +1,31 @@
+from collections.abc import Mapping
 from datetime import datetime, timezone, timedelta
+from typing import Any
 
 import structlog
 from sqlalchemy import select
+
+
+def _sanitize(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        return {k: _sanitize(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize(v) for v in value]
+    return value
+
+
+def _ensure_aware(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
 
 from app.clients import TSADatabase
 from app.database import async_session
@@ -51,16 +75,16 @@ async def _process_tender(raw: dict, db, now: datetime) -> int:
 
     tender = Tender(
         api_id=api_id,
-        raw_payload=raw,
+        raw_payload=_sanitize(raw),
         title=raw.get("title", "Untitled"),
         description=raw.get("description"),
         estimated_value=raw.get("estimated_value"),
         province=raw.get("province"),
         category_id=raw.get("category_id"),
-        closing_date=raw.get("closing_date"),
+        closing_date=_ensure_aware(raw.get("closing_date")),
         buyer_org_id=org_id,
         tender_type=raw.get("type"),
-        published_at=raw.get("publication_date"),
+        published_at=_ensure_aware(raw.get("publication_date")),
         discovered_at=now,
     )
     db.add(tender)
@@ -91,7 +115,7 @@ async def _process_scraper_tender(result, metro_name: str, db, now: datetime) ->
 
     tender = Tender(
         api_id=api_id,
-        raw_payload=raw,
+        raw_payload=_sanitize(raw),
         title=result.title,
         description=result.title,
         estimated_value=result.estimated_value,
@@ -143,7 +167,7 @@ async def discover_new_tenders():
                         id=cat["id"],
                         name=cat.get("canonical_name") or cat.get("name", ""),
                         parent_id=cat.get("parent_id"),
-                        raw_payload=cat,
+                        raw_payload=_sanitize(cat),
                     ))
                 await db.commit()
         except Exception as e:
@@ -158,7 +182,7 @@ async def discover_new_tenders():
             # applied only after storage to decide whether it should be watched.
             raw_tenders: list[dict] = []
             try:
-                source_filters = {"closing_from": now.isoformat()}
+                source_filters = {"closing_from": now.replace(tzinfo=None)}
                 for page in range(TENDER_INGEST_MAX_PAGES):
                     batch = await tsa_db.query_tenders(
                         filters=source_filters,

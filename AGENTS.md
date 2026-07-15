@@ -15,7 +15,7 @@ oricred/
 │   │   ├── main.py              # FastAPI entrypoint, lifespan, CORS, static mount
 │   │   ├── config.py            # Pydantic settings (ORICRED_ prefix)
 │   │   ├── database.py          # SQLAlchemy async engine + session
-│   │   ├── seed.py              # Dev seed data
+│   │   ├── seed.py              # (removed — all data comes from TSA DB ingestion)
 │   │   ├── api/                 # Route handlers (auth, opportunities, watchlist, radar, dashboard, admin)
 │   │   ├── clients/             # Tenders-SA: TSADatabase (direct SQL) + TSAClient (REST, admin retry only)
 │   │   ├── jobs/                # APScheduler jobs (discovery, award_check, model_refresh, scheduler, crm_sync, contact_enrichment)
@@ -38,9 +38,14 @@ oricred/
     └── specifications/ (phase-1, phase-1b, phase-2, phase-3)
 ```
 
+## Database Rules — CRITICAL
+- **Oricred DB (local PostgreSQL)**: All CREATE, UPDATE, DELETE operations must only touch the oricred application database. This is the database configured via the `ORICRED_DATABASE_URL` env var.
+- **Tenders-SA DB (TSADatabase)**: This is an external PostgreSQL database provided by Tenders-SA. It is **STRICTLY READ-ONLY**. No INSERT, UPDATE, DELETE, ALTER, DROP, or any other write operations are ever permitted against this database. The `TSADatabase` client only issues SELECT queries. Violating this will break the data source agreement.
+- When in doubt about which database a piece of code operates on, check the import path: `app.database` = oricred DB, `app.clients.tsa_db` = Tenders-SA read-only DB.
+
 ## Key Conventions
 - **Env prefix**: `ORICRED_` for all settings
-- **DB**: SQLite dev (`sqlite+aiosqlite:///oricred.db`), auto-creates tables via `Base.metadata.create_all`
+- **DB**: PostgreSQL 16, auto-creates tables via `Base.metadata.create_all`
 - **Auth**: JWT with bcrypt, `POST /api/auth/login` returns `access_token`
 - **Models**: UUID string PKs, `DateTime(timezone=True)` for all timestamps
 - **API routes**: All under `/api` prefix, mounted in `app/api/__init__.py`

@@ -27,7 +27,7 @@ class Tender(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     estimated_value: Mapped[float | None] = mapped_column(Numeric(15, 2), nullable=True)
     province: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    category_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    category_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     closing_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     buyer_org_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     tender_type: Mapped[str | None] = mapped_column(String(32), nullable=True)

@@ -1,9 +1,33 @@
 import hashlib
 from collections import defaultdict
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import structlog
 from sqlalchemy import select
+
+
+def _sanitize(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        return {k: _sanitize(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize(v) for v in value]
+    return value
+
+
+def _ensure_aware(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
 
 from app.clients import TSADatabase
 from app.database import async_session
@@ -89,7 +113,7 @@ async def _upsert_awarded_company(db, raw: dict, company_by_name: dict[str, dict
     company.name = co_data.get("name") or supplier
     company.bee_level = co_data.get("bbbee_level") or raw.get("bee_level") or company.bee_level
     company.registration_number = co_data.get("registration_number") or company.registration_number
-    company.raw_payload = co_data or {
+    company.raw_payload = _sanitize(co_data) or {
         "source": "award",
         "award_id": raw.get("id"),
         "supplier_canonical_id": raw.get("supplier_canonical_id"),
@@ -111,13 +135,13 @@ async def _upsert_tender_for_award(db, raw: dict, metadata: dict | None, now: da
     if not tender:
         tender = Tender(
             api_id=tender_api_id,
-            raw_payload=metadata or {"source": "award_ingestion", "award_id": raw.get("id")},
+            raw_payload=_sanitize(metadata) or {"source": "award_ingestion", "award_id": raw.get("id")},
             title=metadata.get("title") or f"Awarded tender {tender_api_id}",
             description=metadata.get("description"),
             estimated_value=metadata.get("estimated_value"),
             province=metadata.get("province"),
             category_id=metadata.get("category_id"),
-            closing_date=metadata.get("closing_date"),
+            closing_date=_ensure_aware(metadata.get("closing_date")),
             buyer_org_id=buyer_org_id,
             tender_type=metadata.get("type"),
             published_at=metadata.get("publication_date"),
@@ -126,16 +150,16 @@ async def _upsert_tender_for_award(db, raw: dict, metadata: dict | None, now: da
         db.add(tender)
         await db.flush()
     elif metadata:
-        tender.raw_payload = metadata
+        tender.raw_payload = _sanitize(metadata)
         tender.title = metadata.get("title") or tender.title
         tender.description = metadata.get("description") or tender.description
         tender.estimated_value = metadata.get("estimated_value") or tender.estimated_value
         tender.province = metadata.get("province") or tender.province
         tender.category_id = metadata.get("category_id") or tender.category_id
-        tender.closing_date = metadata.get("closing_date") or tender.closing_date
+        tender.closing_date = _ensure_aware(metadata.get("closing_date")) or tender.closing_date
         tender.buyer_org_id = buyer_org_id or tender.buyer_org_id
         tender.tender_type = metadata.get("type") or tender.tender_type
-        tender.published_at = metadata.get("publication_date") or tender.published_at
+        tender.published_at = _ensure_aware(metadata.get("publication_date")) or tender.published_at
     return tender
 
 
@@ -158,7 +182,7 @@ async def _upsert_buyer_organization(db, tsa_db: TSADatabase, tender: Tender, no
             contact_website=org.get("website"),
             contact_email_is_role_based=org.get("contact_email_is_role_based"),
             confidence_score=org.get("confidence_score"),
-            raw_payload=org,
+            raw_payload=_sanitize(org),
             last_refreshed_at=now,
         ))
     except Exception as exc:
@@ -216,7 +240,7 @@ async def check_awards_for_watching(backfill: bool = False):
             try:
                 for page in range(AWARD_INGEST_MAX_PAGES):
                     batch = await tsa_db.query_awards(
-                        filters={"since": since.isoformat()},
+                        filters={"since": since.replace(tzinfo=None) if isinstance(since, datetime) and since.tzinfo else since},
                         fields=AWARD_FIELDS,
                         limit=AWARD_INGEST_LIMIT,
                         offset=page * AWARD_INGEST_LIMIT,
@@ -278,11 +302,11 @@ async def check_awards_for_watching(backfill: bool = False):
                     db.add(award)
                     await db.flush()
                 award.tender_id = tender.id
-                award.raw_payload = raw
+                award.raw_payload = _sanitize(raw)
                 award.supplier_name = supplier
                 award.supplier_company_id = company.api_id
                 award.amount = raw.get("amount")
-                award.award_date = raw.get("award_date")
+                award.award_date = _ensure_aware(raw.get("award_date"))
                 award.bee_level = raw.get("bee_level")
                 award.bee_points = raw.get("bee_points")
                 award.buyer_org_id = tender.buyer_org_id

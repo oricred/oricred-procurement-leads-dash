@@ -27,7 +27,7 @@ class FilterHandler(ABC):
 
 
 class ValueRangeFilter(FilterHandler):
-    async def evaluate(self, tender: Tender, rules: list[dict]) -> FilterResult:
+    async def evaluate(self, tender: Tender, rules: list[dict], db: AsyncSession | None = None) -> FilterResult:
         value: Decimal | None = tender.estimated_value
         if value is None:
             return FilterResult(passed=True)
@@ -42,7 +42,7 @@ class ValueRangeFilter(FilterHandler):
 
 
 class SectorFilter(FilterHandler):
-    async def evaluate(self, tender: Tender, rules: list[dict]) -> FilterResult:
+    async def evaluate(self, tender: Tender, rules: list[dict], db: AsyncSession | None = None) -> FilterResult:
         cats = [tender.category_id] if tender.category_id else []
         for rule in rules:
             if rule.get("type") == "include":
@@ -55,7 +55,7 @@ class SectorFilter(FilterHandler):
 
 
 class ProvinceFilter(FilterHandler):
-    async def evaluate(self, tender: Tender, rules: list[dict]) -> FilterResult:
+    async def evaluate(self, tender: Tender, rules: list[dict], db: AsyncSession | None = None) -> FilterResult:
         if not tender.province:
             return FilterResult(passed=True)
         for rule in rules:
@@ -87,12 +87,12 @@ class EntityTypeFilter(FilterHandler):
 
 
 class BEEFilter(FilterHandler):
-    async def evaluate(self, tender: Tender, rules: list[dict]) -> FilterResult:
+    async def evaluate(self, tender: Tender, rules: list[dict], db: AsyncSession | None = None) -> FilterResult:
         return FilterResult(passed=True)
 
 
 class RiskExclusionFilter(FilterHandler):
-    async def evaluate(self, tender: Tender, rules: list[dict]) -> FilterResult:
+    async def evaluate(self, tender: Tender, rules: list[dict], db: AsyncSession | None = None) -> FilterResult:
         return FilterResult(passed=True)
 
 
