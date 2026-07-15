@@ -9,6 +9,8 @@ class AwardItem(BaseModel):
     buyer_org_id: str | None = None
     buyer_org_name: str | None = None
     tender_title: str | None = None
+    category_id: str | None = None
+    category_name: str | None = None
     amount: float | None = None
     award_date: datetime | None = None
     bee_level: int | None = None

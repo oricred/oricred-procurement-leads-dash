@@ -4,6 +4,8 @@ export interface AwardItem {
   buyer_org_id: string | null;
   buyer_org_name: string | null;
   tender_title: string | null;
+  category_id: string | null;
+  category_name: string | null;
   amount: number | null;
   award_date: string | null;
   bee_level: number | null;
@@ -78,6 +80,7 @@ export interface Opportunity {
   buyer_org: string | null;
   province: string | null;
   category: string | null;
+  category_name: string | null;
   kanban_stage: Stage;
   assigned_to: string | null;
   contact_sufficiency: 'sufficient' | 'role_based' | 'none' | null;
@@ -199,6 +202,7 @@ export interface WatchlistItem {
   title: string;
   estimated_value: number | null;
   category: string | null;
+  category_name: string | null;
   province: string | null;
   buyer_org: string | null;
   status: string;

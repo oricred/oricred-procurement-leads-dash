@@ -166,8 +166,8 @@ async def discover_new_tenders():
             async with async_session() as db:
                 for cat in cats:
                     await db.merge(Category(
-                        id=cat["id"],
-                        name=cat.get("canonical_name") or cat.get("name", ""),
+                        id=cat.get("canonical_name") or cat.get("id"),
+                        name=cat.get("name") or cat.get("canonical_name", ""),
                         parent_id=cat.get("parent_id"),
                         raw_payload=_sanitize(cat),
                     ))

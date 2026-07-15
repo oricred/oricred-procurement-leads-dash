@@ -16,6 +16,7 @@ class OpportunityRead(BaseModel):
     buyer_org: str | None = None
     province: str | None = None
     category: str | None = None
+    category_name: str | None = None
     kanban_stage: str
     assigned_to: str | None = None
     contact_sufficiency: str | None = None

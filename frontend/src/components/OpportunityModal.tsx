@@ -215,7 +215,7 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Category</span>
-                <span className="text-gray-200">{opp.category ?? '—'}</span>
+                <span className="text-gray-200">{opp.category_name ?? opp.category ?? '—'}</span>
               </div>
             </div>
           </div>

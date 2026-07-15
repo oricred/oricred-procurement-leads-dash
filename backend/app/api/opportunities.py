@@ -15,6 +15,7 @@ from app.models.company import Company
 from app.models.organization import Organization
 from app.models.contact import Contact
 from app.models.user import User
+from app.models.category import Category
 from app.schemas.opportunity import OpportunityRead, OpportunityStageUpdate, OpportunityUpdate, OpportunityList, AuditEntry, OpportunityContactedUpdate, OpportunityTransition
 from app.schemas.contact import ContactRead
 from app.schemas.buyer_relationship import BuyerRelationshipRead
@@ -52,7 +53,7 @@ async def _load_opportunity_contacts(opp: Opportunity, db: AsyncSession) -> list
     return [ContactRead.model_validate(c) for c in contacts]
 
 
-def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: Award | None = None, company: Company | None = None, contacts: list[ContactRead] | None = None, buyer_org_name: str | None = None) -> OpportunityRead:
+def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: Award | None = None, company: Company | None = None, contacts: list[ContactRead] | None = None, buyer_org_name: str | None = None, category_name: str | None = None) -> OpportunityRead:
     days_since = None
     if award and award.award_date:
         days_since = (datetime.now(timezone.utc) - award.award_date).days
@@ -67,6 +68,7 @@ def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: 
         buyer_org=buyer_org_name or (tender.buyer_org_id if tender else None),
         province=tender.province if tender else None,
         category=tender.category_id if tender else None,
+        category_name=category_name or (tender.category_id if tender else None),
         kanban_stage=normalize_stage(opp.kanban_stage) or opp.kanban_stage,
         assigned_to=opp.assigned_to,
         contact_sufficiency=opp.contact_sufficiency,
@@ -140,8 +142,14 @@ async def list_opportunities(
             if org:
                 buyer_org_name = org.name
 
+        category_name = None
+        if tender and tender.category_id:
+            cat = await db.get(Category, tender.category_id)
+            if cat:
+                category_name = cat.name
+
         contacts = await _load_opportunity_contacts(opp, db)
-        items.append(_opportunity_to_read(opp, tender, award, company, contacts, buyer_org_name))
+        items.append(_opportunity_to_read(opp, tender, award, company, contacts, buyer_org_name, category_name))
 
     return OpportunityList(items=items, total=len(items))
 
@@ -299,8 +307,14 @@ async def _read_opportunity_with_context(opp: Opportunity, db: AsyncSession) -> 
         if org:
             buyer_org_name = org.name
 
+    category_name = None
+    if tender and tender.category_id:
+        cat = await db.get(Category, tender.category_id)
+        if cat:
+            category_name = cat.name
+
     contacts = await _load_opportunity_contacts(opp, db)
-    return _opportunity_to_read(opp, tender, award, company, contacts, buyer_org_name)
+    return _opportunity_to_read(opp, tender, award, company, contacts, buyer_org_name, category_name)
 
 
 @router.post("/{opportunity_id}/find-contact", response_model=OpportunityRead)

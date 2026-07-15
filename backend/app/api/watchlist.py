@@ -9,6 +9,7 @@ from app.models.watchlist import WatchlistItem
 from app.models.tender import Tender
 from app.models.opportunity import Opportunity
 from app.models.past_due import PastDueQueue
+from app.models.category import Category
 from app.schemas.watchlist import WatchlistItemRead, WatchlistList, WatchToggleRequest, WatchToggleResponse
 from app.services.award_timing import AwardTimingService
 from app.api.auth import get_current_user
@@ -77,12 +78,19 @@ async def get_watchlist(db: AsyncSession = Depends(get_db)):
             if total > 0:
                 progress = min(100, max(0, int(elapsed / total * 100)))
 
+        cat_name = None
+        if tender.category_id:
+            cat = await db.get(Category, tender.category_id)
+            if cat:
+                cat_name = cat.name
+
         items.append(WatchlistItemRead(
             id=str(wl.id),
             tender_id=str(tender.id),
             title=tender.title,
             estimated_value=tender.estimated_value,
             category=tender.category_id,
+            category_name=cat_name,
             province=tender.province,
             buyer_org=tender.buyer_org_id,
             status=wl.status,

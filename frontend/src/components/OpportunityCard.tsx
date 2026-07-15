@@ -72,9 +72,9 @@ function CardContent({ opportunity: opp }: { opportunity: Opportunity }) {
             P{opp.buyer_preference_score >= 90 ? '★' : ''}
           </span>
         )}
-        {opp.category && (
+        {opp.category_name && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-400 text-gray-400 uppercase">
-            {opp.category.slice(0, 4)}
+            {opp.category_name.slice(0, 5)}
           </span>
         )}
       </div>

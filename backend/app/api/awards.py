@@ -15,6 +15,7 @@ from app.models.opportunity import Opportunity
 from app.models.watchlist import WatchlistItem
 from app.models.organization import Organization
 from app.models.tender import Tender
+from app.models.category import Category
 from app.schemas.award import AwardItem, AwardsList
 from app.schemas.opportunity import OpportunityRead
 from app.services.lead_scoring import refresh_lead_scoring
@@ -32,11 +33,14 @@ def _query_awards():
     return (
         select(
             Award, Organization.name.label("buyer_org_name"), Tender.title.label("tender_title"),
+            Tender.category_id.label("category_id"),
+            Category.name.label("category_name"),
             Opportunity.id.label("opportunity_id"), Opportunity.kanban_stage.label("lead_stage"),
             Opportunity.contact_sufficiency.label("contact_readiness"), Company.id.label("company_id"),
             WatchlistItem.id.label("watchlist_id"),
         )
         .outerjoin(Tender, Award.tender_id == Tender.id)
+        .outerjoin(Category, Tender.category_id == Category.id)
         .outerjoin(Organization, Award.buyer_org_id == Organization.id)
         .outerjoin(Company, Award.supplier_company_id == Company.api_id)
         .outerjoin(Opportunity, Opportunity.award_id == Award.id)
@@ -92,6 +96,8 @@ def _item(row) -> AwardItem:
         buyer_org_id=optional(getattr(award, "buyer_org_id", None)),
         buyer_org_name=optional(getattr(row, "buyer_org_name", None)),
         tender_title=optional(getattr(row, "tender_title", None)),
+        category_id=optional(getattr(row, "category_id", None)),
+        category_name=optional(getattr(row, "category_name", None)),
         amount=float(award.amount) if getattr(award, "amount", None) is not None else None,
         award_date=optional(getattr(award, "award_date", None)),
         bee_level=optional(getattr(award, "bee_level", None)), source=award.source,

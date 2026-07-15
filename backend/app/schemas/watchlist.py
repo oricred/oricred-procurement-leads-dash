@@ -10,6 +10,7 @@ class WatchlistItemRead(BaseModel):
     title: str
     estimated_value: Decimal | None = None
     category: str | None = None
+    category_name: str | None = None
     province: str | None = None
     buyer_org: str | None = None
     status: str

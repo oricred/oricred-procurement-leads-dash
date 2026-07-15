@@ -46,7 +46,7 @@ export default function LeadsPage() {
     const needle = query.trim().toLowerCase();
     if (!needle) return all;
     return all.filter((opp) =>
-      [opp.company_name, opp.buyer_org, opp.source_tender_title, opp.province, opp.category]
+      [opp.company_name, opp.buyer_org, opp.source_tender_title, opp.province, opp.category, opp.category_name]
         .some((value) => (value ?? '').toLowerCase().includes(needle)),
     );
   }, [data?.items, query]);
@@ -106,7 +106,7 @@ export default function LeadsPage() {
                 >
                   <td className="px-4 py-3 align-top">
                     <div className="font-medium text-gray-100 truncate max-w-[260px]">{opp.company_name ?? 'Unknown Company'}</div>
-                    <div className="text-xs text-gray-500 truncate max-w-[260px]">{opp.province ?? '—'} · {opp.category ?? '—'}</div>
+                    <div className="text-xs text-gray-500 truncate max-w-[260px]">{opp.province ?? '—'} · {opp.category_name ?? opp.category ?? '—'}</div>
                   </td>
                   <td className="px-4 py-3 align-top">
                     {contact ? (

@@ -83,11 +83,11 @@ export default function MatchingPage() {
 
                   <div className="flex items-center gap-3 text-xs text-gray-500 mb-3">
                     <span className="font-mono font-semibold text-gray-300">{formatCurrency(item.estimated_value)}</span>
-                    {item.category && <span className="uppercase">{item.category}</span>}
-                    {item.province && <span>{item.province}</span>}
-                  </div>
+                                          {item.category_name && <span className="uppercase">{item.category_name}</span>}
+                      {item.province && <span>{item.province}</span>}
+                    </div>
 
-                  <p className="text-xs text-gray-600 truncate mb-3">{item.buyer_org}</p>
+                    <p className="text-xs text-gray-600 truncate mb-3">{item.buyer_org}</p>
 
                   {item.progress_pct != null && (
                     <div className="mb-3">
@@ -163,7 +163,7 @@ export default function MatchingPage() {
 
                         <div className="flex items-center gap-3 text-xs text-gray-500 mb-3">
                           <span className="font-mono font-semibold text-gray-300">{formatCurrency(item.estimated_value)}</span>
-                          {item.category && <span className="uppercase">{item.category}</span>}
+                          {item.category_name && <span className="uppercase">{item.category_name}</span>}
                           {item.province && <span>{item.province}</span>}
                         </div>
 
