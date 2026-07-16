@@ -24,6 +24,7 @@ async def get_db():
 
 AWARD_COLUMNS: dict[str, str] = {
     "publication_date": "TIMESTAMPTZ",
+    "source_created_at": "TIMESTAMPTZ",
 }
 
 OPPORTUNITY_COLUMNS = {

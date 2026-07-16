@@ -43,6 +43,7 @@ AWARD_FIELD_MAP: dict[str, str] = {
     "supplier_canonical_id": "a.supplier_canonical_id",
     "amount": "a.amount",
     "award_date": "a.award_date",
+    "created_at": "a.created_at",
     "publication_date": "a.publication_date",
     "bee_level": "a.bee_level",
     "bee_points": "a.bee_points",

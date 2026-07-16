@@ -7,108 +7,91 @@ def _dt(y, m, d, h=0, mi=0):
     return datetime(y, m, d, h, mi, tzinfo=timezone.utc)
 
 
-NOW = _dt(2026, 7, 16, 10, 0)
 DISCOVERED = _dt(2026, 7, 15, 12, 21)
+NOW = _dt(2026, 7, 16, 10, 0)
+
+
+def _resolve(raw_date, pub=None, tpub=None, close=None, src=None, disc=None, now=None):
+    if disc is None:
+        disc = DISCOVERED
+    if now is None:
+        now = NOW
+    return _resolve_award_date(raw_date, pub, tpub, close, src, disc, now)
 
 
 class TestResolveAwardDate:
-    # ── Step 1: direct use ──
-
     def test_valid_date_direct_use(self):
-        r = _resolve_award_date("2025-06-17", None, None, None, DISCOVERED, NOW)
-        assert r == _dt(2025, 6, 17)
+        assert _resolve("2025-06-17") == _dt(2025, 6, 17)
 
     def test_valid_date_within_tender_bounds(self):
-        r = _resolve_award_date(
-            "2025-06-20", None, _dt(2025, 6, 1), _dt(2025, 6, 15), DISCOVERED, NOW,
-        )
-        assert r == _dt(2025, 6, 20)
+        assert _resolve(
+            "2025-06-20", tpub=_dt(2025, 6, 1), close=_dt(2025, 6, 15),
+        ) == _dt(2025, 6, 20)
 
     def test_valid_date_future_violates_discovered_falls_through(self):
-        r = _resolve_award_date("2099-10-09", None, None, None, DISCOVERED, NOW)
-        assert r != _dt(2099, 10, 9)
-
-    # ── Step 2: year correction for borderline years (≤ MAX_VALID_YEAR=2027) ──
+        assert _resolve("2099-10-09") != _dt(2099, 10, 9)
 
     def test_year_correction_uses_discovered_year(self):
-        discovered = _dt(2026, 5, 1)
-        r = _resolve_award_date("2027-01-13", None, None, None, discovered, NOW)
-        assert r == _dt(2026, 1, 13)
+        assert _resolve("2027-01-13", disc=_dt(2026, 5, 1)) == _dt(2026, 1, 13)
 
     def test_year_correction_falls_back_to_discovered_minus_one(self):
-        discovered = _dt(2025, 3, 1)
-        r = _resolve_award_date("2027-06-15", None, None, None, discovered, NOW)
-        # ref_years = [2025, 2024]; 2025-06-15 > discovered 2025-03-01 → skip
-        # 2024-06-15 ≤ discovered 2025-03-01 → use
-        assert r == _dt(2024, 6, 15)
+        assert _resolve("2027-06-15", disc=_dt(2025, 3, 1)) == _dt(2024, 6, 15)
 
     def test_year_correction_pub_year_priority(self):
-        pub_date = _dt(2025, 6, 1)
-        r = _resolve_award_date("2027-03-01", pub_date, None, None, DISCOVERED, NOW)
-        # corrected = 2025-03-01 ≤ pub_date 2025-06-01 → OK
-        assert r == _dt(2025, 3, 1)
+        assert _resolve("2027-03-01", pub=_dt(2025, 6, 1)) == _dt(2025, 3, 1)
 
     def test_year_correction_closing_year_fallback(self):
-        pub_date = _dt(2025, 6, 1)
-        closing = _dt(2024, 12, 1)
-        r = _resolve_award_date("2027-03-01", pub_date, None, closing, DISCOVERED, NOW)
-        # ref_years = [2025, 2024, 2026]; 2025-03-01 ≤ discovered, ≤ pub_date → OK
-        assert r == _dt(2025, 3, 1)
+        assert _resolve(
+            "2027-03-01", pub=_dt(2025, 6, 1), close=_dt(2024, 12, 1),
+        ) == _dt(2025, 3, 1)
 
     def test_year_correction_corrected_before_closing_skipped(self):
-        closing = _dt(2025, 6, 15)
-        r = _resolve_award_date("2027-03-01", None, None, closing, DISCOVERED, NOW)
-        # ref_years = [2025, 2026]; corrected = 2025-03-01 < closing 2025-06-15 → OK actually
-        # The lower is tender_published_at or tender_closing_date = closing = 2025-06-15
-        # corrected 2025-03-01 < 2025-06-15 → violates lower bound → skip
-        # Next ref: 2026 → corrected = 2026-03-01 ≤ discovered → 2026-03-01 < 2025-06-15? 
-        # 2026-03-01 is not < 2025-06-15, it's greater → OK
-        # So it would use 2026-03-01
-        assert r == _dt(2026, 3, 1)
+        assert _resolve("2027-03-01", close=_dt(2025, 6, 15)) == _dt(2026, 3, 1)
 
     def test_year_correction_corrected_after_pub_falls_to_pub(self):
-        pub_date = _dt(2025, 6, 1)
-        r = _resolve_award_date("2027-10-09", pub_date, None, None, DISCOVERED, NOW)
-        # ref_years = [2025, 2026]; corrected = 2025-10-09 > pub_date 2025-06-01 → violation
-        # pub_date 2025-06-01 ≤ discovered → return pub_date
-        assert r == pub_date
-
-    # ── Step 3: fully corrupt year (> MAX_VALID_YEAR) → fallback ──
+        pub = _dt(2025, 6, 1)
+        assert _resolve("2027-10-09", pub=pub) == pub
 
     def test_corrupt_year_fallback_to_discovered(self):
-        r = _resolve_award_date("2099-10-09", None, None, None, DISCOVERED, NOW)
-        assert r == DISCOVERED
+        assert _resolve("2099-10-09") == DISCOVERED
 
     def test_corrupt_year_fallback_to_publication_date(self):
-        pub_date = _dt(2025, 8, 1)
-        r = _resolve_award_date("2099-10-09", pub_date, None, None, DISCOVERED, NOW)
-        assert r == pub_date
+        assert _resolve("2099-10-09", pub=_dt(2025, 8, 1)) == _dt(2025, 8, 1)
 
     def test_corrupt_year_fallback_to_tender_published(self):
-        pub = _dt(2025, 3, 15)
-        closing = _dt(2025, 6, 1)
-        r = _resolve_award_date("2099-10-09", None, pub, closing, DISCOVERED, NOW)
-        assert r == pub
+        assert _resolve(
+            "2099-10-09", tpub=_dt(2025, 3, 15), close=_dt(2025, 6, 1),
+        ) == _dt(2025, 3, 15)
 
     def test_corrupt_year_fallback_to_tender_closing(self):
-        closing = _dt(2025, 1, 30)
-        r = _resolve_award_date("2099-10-09", None, None, closing, DISCOVERED, NOW)
-        assert r == closing
+        assert _resolve("2099-10-09", close=_dt(2025, 1, 30)) == _dt(2025, 1, 30)
 
-    # ── NULL raw_date ──
+    def test_corrupt_year_fallback_to_source_created_at(self):
+        assert _resolve(
+            "2099-10-09", src=_dt(2025, 4, 15),
+        ) == _dt(2025, 4, 15)
+
+    def test_source_created_at_before_discovered_in_fallback(self):
+        assert _resolve(
+            "2099-10-09", src=_dt(2025, 6, 1),
+        ) == _dt(2025, 6, 1)
+
+    def test_source_created_as_ref_year(self):
+        assert _resolve(
+            "2027-03-15", src=_dt(2025, 6, 1),
+        ) == _dt(2025, 3, 15)
 
     def test_null_raw_date_falls_to_discovered(self):
-        r = _resolve_award_date(None, None, None, None, DISCOVERED, NOW)
-        assert r == DISCOVERED
+        assert _resolve(None) == DISCOVERED
 
     def test_null_raw_date_falls_to_closing(self):
-        r = _resolve_award_date(None, None, None, _dt(2025, 6, 1), DISCOVERED, NOW)
-        assert r == _dt(2025, 6, 1)
+        assert _resolve(None, close=_dt(2025, 6, 1)) == _dt(2025, 6, 1)
+
+    def test_null_raw_date_falls_to_source_created_at(self):
+        assert _resolve(None, src=_dt(2025, 3, 1)) == _dt(2025, 3, 1)
 
     def test_discovered_in_future_uses_now(self):
-        future_disc = _dt(2099, 1, 1)
-        r = _resolve_award_date(None, None, None, None, future_disc, NOW)
-        assert r == NOW
+        assert _resolve(None, disc=_dt(2099, 1, 1)) == NOW
 
 
 class TestParseLenient:

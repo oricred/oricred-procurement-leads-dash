@@ -32,4 +32,5 @@ class Award(Base):
     buyer_org_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source: Mapped[str] = mapped_column(String(16), nullable=False, default="tenders_api")
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

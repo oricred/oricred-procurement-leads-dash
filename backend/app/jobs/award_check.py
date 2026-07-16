@@ -43,7 +43,7 @@ logger = structlog.get_logger()
 
 AWARD_FIELDS = [
     "id", "tender_id", "supplier_name", "amount", "award_date",
-    "bee_level", "bee_points", "supplier_canonical_id",
+    "created_at", "bee_level", "bee_points", "supplier_canonical_id",
 ]
 TENDER_FIELDS = [
     "id", "tender_id", "title", "description", "estimated_value", "province",
@@ -99,6 +99,7 @@ def _resolve_award_date(
     award_publication_date: datetime | None,
     tender_published_at: datetime | None,
     tender_closing_date: datetime | None,
+    source_created_at: datetime | None,
     discovered_at: datetime,
     now: datetime,
 ) -> datetime:
@@ -114,7 +115,8 @@ def _resolve_award_date(
        → fall through to step 3
     3. If raw year is clearly corrupt (>2027, month/day unreliable) →
        skip year correction, use best available proxy
-    4. Fallback to best available proxy (pub_date → tender dates → discovered_at)
+    4. Fallback to best available proxy (pub_date → tender dates →
+       source_created_at → discovered_at)
     """
     stricter = parse_datetime(raw_date)
     lenient = _parse_lenient(raw_date)
@@ -124,6 +126,8 @@ def _resolve_award_date(
     for ref in (award_publication_date, tender_published_at, tender_closing_date):
         if ref is not None and ref.year <= now.year:
             ref_years.append(ref.year)
+    if source_created_at is not None and source_created_at.year <= now.year:
+        ref_years.append(source_created_at.year)
     ref_years.append(discovered_at.year)
     if discovered_at.year - 1 >= 2000:
         ref_years.append(discovered_at.year - 1)
@@ -163,7 +167,7 @@ def _resolve_award_date(
                         return award_publication_date
 
     # Step 3 — fallback to best available proxy
-    for candidate in (award_publication_date, tender_published_at, tender_closing_date, discovered_at):
+    for candidate in (award_publication_date, tender_published_at, tender_closing_date, source_created_at, discovered_at):
         if candidate is not None and candidate <= now:
             if candidate is not discovered_at:
                 logger.warning("award_date_fallback", candidate=candidate.isoformat())
@@ -392,9 +396,10 @@ async def check_awards_for_watching(backfill: bool = False):
                 award.supplier_company_id = company.api_id
                 award.amount = raw.get("amount")
                 award.publication_date = parse_datetime(raw.get("publication_date"))
+                award.source_created_at = parse_datetime(raw.get("created_at"))
                 award.award_date = _resolve_award_date(
                     raw.get("award_date"), award.publication_date, tender.published_at, tender.closing_date,
-                    award.discovered_at, now,
+                    award.source_created_at, award.discovered_at, now,
                 )
                 award.bee_level = raw.get("bee_level")
                 award.bee_points = raw.get("bee_points")
@@ -535,7 +540,7 @@ async def fix_corrupted_award_dates() -> int:
                 award.publication_date,
                 tender.published_at if tender else None,
                 tender.closing_date if tender else None,
-                award.discovered_at, now,
+                award.source_created_at, award.discovered_at, now,
             )
             if recovered != original:
                 award.award_date = recovered
