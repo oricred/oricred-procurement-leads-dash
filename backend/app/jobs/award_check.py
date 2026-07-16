@@ -121,13 +121,13 @@ def _resolve_award_date(
     stricter = parse_datetime(raw_date)
     lenient = _parse_lenient(raw_date)
 
-    # Reference years in priority order (deduped)
+    # Reference years in priority order (deduped). source_created_at is not
+    # included because its month/day is the source insert timestamp, not the
+    # award date — it's only used as an entire-date fallback in step 3.
     ref_years: list[int] = []
     for ref in (award_publication_date, tender_published_at, tender_closing_date):
         if ref is not None and ref.year <= now.year:
             ref_years.append(ref.year)
-    if source_created_at is not None and source_created_at.year <= now.year:
-        ref_years.append(source_created_at.year)
     ref_years.append(discovered_at.year)
     if discovered_at.year - 1 >= 2000:
         ref_years.append(discovered_at.year - 1)

@@ -76,10 +76,10 @@ class TestResolveAwardDate:
             "2099-10-09", src=_dt(2025, 6, 1),
         ) == _dt(2025, 6, 1)
 
-    def test_source_created_as_ref_year(self):
+    def test_source_created_at_not_used_as_ref_year(self):
         assert _resolve(
             "2027-03-15", src=_dt(2025, 6, 1),
-        ) == _dt(2025, 3, 15)
+        ) == _dt(2026, 3, 15)  # uses discovered.year (2026), not src.year (2025)
 
     def test_null_raw_date_falls_to_discovered(self):
         assert _resolve(None) == DISCOVERED
