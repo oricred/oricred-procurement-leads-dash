@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, Building2, Award, Users, FileText, TrendingUp, BarChart3, Activity, History, Edit2, Phone, Mail, Linkedin, Star, Plus, Trash2, RefreshCcw, CheckCircle2 } from 'lucide-react';
+import { X, Building2, Award, Users, FileText, TrendingUp, BarChart3, Activity, History, Edit2, Phone, Mail, Linkedin, Star, Plus, Trash2, CheckCircle2 } from 'lucide-react';
 import { auth, opportunities, buyerRelationships, crmActivity, contacts as contactsApi } from '../services/api';
 import type { Opportunity, Contact } from '../types';
 import WorkflowActions from './WorkflowActions';
@@ -166,15 +166,7 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <WorkflowActions opportunity={opp} />
-            <button
-              onClick={() => findContactMutation.mutate()}
-              disabled={findContactMutation.isPending}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded bg-surface-300 text-gray-300 hover:text-white hover:bg-surface-400 transition-colors disabled:opacity-50"
-            >
-              <RefreshCcw className={`w-3.5 h-3.5 ${findContactMutation.isPending ? 'animate-spin' : ''}`} />
-              {findContactMutation.isPending ? 'Searching...' : 'Find Contact'}
-            </button>
+            <WorkflowActions opportunity={opp} onFindContact={() => findContactMutation.mutate()} findContactPending={findContactMutation.isPending} />
             {findContactFeedback && (
               <span className={`text-xs font-medium ${
                 findContactFeedback.includes('No') || findContactFeedback.includes('failed')

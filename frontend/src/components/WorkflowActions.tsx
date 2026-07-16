@@ -1,14 +1,22 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, ArrowRight, CheckCircle2, RotateCcw, XCircle } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CheckCircle2, ChevronDown, RefreshCcw, RotateCcw, XCircle } from 'lucide-react';
 import { opportunities } from '../services/api';
 import type { Opportunity } from '../types';
 
 type Dialog = 'loss' | 'credit' | 'conditions' | 'back' | 'reopen' | null;
 
-export default function WorkflowActions({ opportunity }: { opportunity: Opportunity }) {
+interface WorkflowActionsProps {
+  opportunity: Opportunity;
+  onFindContact?: () => void;
+  findContactPending?: boolean;
+}
+
+export default function WorkflowActions({ opportunity, onFindContact, findContactPending = false }: WorkflowActionsProps) {
   const queryClient = useQueryClient();
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [lostReason, setLostReason] = useState('');
   const [conditionText, setConditionText] = useState('');
   const [conditions, setConditions] = useState<Array<Record<string, unknown>>>(opportunity.conditions_checklist ?? []);
@@ -52,29 +60,49 @@ export default function WorkflowActions({ opportunity }: { opportunity: Opportun
     transition.mutate({ action: 'advance', version: opportunity.version });
   }
 
-  const pending = transition.isPending || markContacted.isPending;
+  const pending = transition.isPending || markContacted.isPending || findContactPending;
 
-  return <div className="flex flex-wrap items-center justify-end gap-2">
-    {isTerminal ? (
-      <button onClick={() => setDialog('reopen')} disabled={pending} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded bg-primary-600 text-white hover:bg-primary-500 disabled:opacity-50">
-        <RotateCcw className="w-3.5 h-3.5" />Reopen
-      </button>
-    ) : (
-      <>
+  useEffect(() => {
+    const closeMenu = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', closeMenu);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeMenu);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, []);
+
+  function runMenuAction(action: () => void) {
+    setMenuOpen(false);
+    action();
+  }
+
+  const menuItemClass = 'flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50';
+
+  return <div ref={menuRef} className="relative">
+    <button onClick={() => setMenuOpen(open => !open)} disabled={pending} aria-haspopup="menu" aria-expanded={menuOpen} className="inline-flex items-center gap-1.5 rounded bg-surface-300 px-2.5 py-1.5 text-xs text-gray-200 hover:bg-surface-400 hover:text-white disabled:opacity-50">
+      Actions <ChevronDown className={`h-3.5 w-3.5 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
+    </button>
+    {menuOpen && <div role="menu" aria-label="Opportunity actions" className="absolute right-0 top-full z-30 mt-2 w-44 rounded-lg border border-surface-300 bg-surface-200 p-1 shadow-xl">
+      {onFindContact && <button role="menuitem" onClick={() => runMenuAction(onFindContact)} disabled={pending} className={`${menuItemClass} text-gray-300 hover:bg-surface-300 hover:text-white`}><RefreshCcw className={`h-3.5 w-3.5 ${findContactPending ? 'animate-spin' : ''}`} />{findContactPending ? 'Searching...' : 'Find Contact'}</button>}
+      {isTerminal ? (
+        <button role="menuitem" onClick={() => runMenuAction(() => setDialog('reopen'))} disabled={pending} className={`${menuItemClass} text-primary-300 hover:bg-primary-500/10`}><RotateCcw className="h-3.5 w-3.5" />Reopen</button>
+      ) : <>
         {opportunity.kanban_stage === 'new_lead' ? (
-          <button onClick={() => markContacted.mutate()} disabled={pending} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded bg-primary-600 text-white hover:bg-primary-500 disabled:opacity-50">
-            <CheckCircle2 className="w-3.5 h-3.5" />Mark contacted
-          </button>
+          <button role="menuitem" onClick={() => runMenuAction(() => markContacted.mutate())} disabled={pending} className={`${menuItemClass} text-primary-300 hover:bg-primary-500/10`}><CheckCircle2 className="h-3.5 w-3.5" />Mark contacted</button>
         ) : (
-          <button onClick={advance} disabled={pending} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50">
-            <ArrowRight className="w-3.5 h-3.5" />Advance
-          </button>
+          <button role="menuitem" onClick={() => runMenuAction(advance)} disabled={pending} className={`${menuItemClass} text-emerald-300 hover:bg-emerald-500/10`}><ArrowRight className="h-3.5 w-3.5" />Advance</button>
         )}
-        {canGoBack && <button onClick={() => setDialog('back')} disabled={pending} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded text-gray-300 hover:bg-surface-300 disabled:opacity-50"><ArrowLeft className="w-3.5 h-3.5" />Back</button>}
-        <button onClick={() => setDialog('loss')} disabled={pending} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded text-red-300 hover:bg-red-500/10 disabled:opacity-50"><XCircle className="w-3.5 h-3.5" />Decline</button>
-      </>
-    )}
-    {(errorMessage || markContacted.isError) && <p className="basis-full text-right text-xs text-red-400">{errorMessage ?? 'Unable to mark the lead contacted.'}</p>}
+        {canGoBack && <button role="menuitem" onClick={() => runMenuAction(() => setDialog('back'))} disabled={pending} className={`${menuItemClass} text-gray-300 hover:bg-surface-300 hover:text-white`}><ArrowLeft className="h-3.5 w-3.5" />Back</button>}
+        <button role="menuitem" onClick={() => runMenuAction(() => setDialog('loss'))} disabled={pending} className={`${menuItemClass} text-red-300 hover:bg-red-500/10`}><XCircle className="h-3.5 w-3.5" />Decline</button>
+      </>}
+    </div>}
+    {(errorMessage || markContacted.isError) && <p className="absolute right-0 top-full mt-1 w-64 text-right text-xs text-red-400">{errorMessage ?? 'Unable to mark the lead contacted.'}</p>}
     {dialog && <ActionDialog dialog={dialog} lostReason={lostReason} setLostReason={setLostReason} conditions={conditions} setConditions={setConditions} conditionText={conditionText} setConditionText={setConditionText} pending={transition.isPending} onClose={() => setDialog(null)} onConfirm={() => {
       if (dialog === 'loss') transition.mutate({ action: 'decline', version: opportunity.version, lost_reason: lostReason });
       if (dialog === 'credit') transition.mutate({ action: 'advance', version: opportunity.version, credit_decision: 'approved' });
