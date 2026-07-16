@@ -22,12 +22,12 @@ def parse_datetime(value: Any, context: str = "") -> datetime | None:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
             dt = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
         except ValueError:
-            logger.warning("parse_datetime_failed", value=value, context=context)
+            logger.warning("parse_datetime_failed value=%s context=%s", value, context)
             return None
     else:
-        logger.warning("parse_datetime_unexpected_type", type=type(value).__name__, context=context)
+        logger.warning("parse_datetime_unexpected_type type=%s context=%s", type(value).__name__, context)
         return None
     if dt.year > MAX_VALID_YEAR:
-        logger.warning("parse_datetime_year_too_high", year=dt.year, max_year=MAX_VALID_YEAR, context=context)
+        logger.warning("parse_datetime_year_too_high year=%s max_year=%s context=%s", dt.year, MAX_VALID_YEAR, context)
         return None
     return dt

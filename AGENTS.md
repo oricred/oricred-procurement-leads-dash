@@ -194,29 +194,42 @@ new_lead → client_contacted → qualified_lead → won_opportunity → credit_
 
 ## Award Date Domain Rules
 
-The `award_date` on the `awards` table represents the date the contract was
-**awarded/decided** — not the publication date. The TSA DB source can have
-century typos (e.g. `2099` instead of `1999`/`2025`).
+The `award_date` on the `awards` table is the **core business value** of the
+platform — it drives client workflows for contacting awarded suppliers to propose
+funding. The TSA DB source can have century typos (e.g. `2062` instead of `2025`).
+A missing date makes the record useless, so the resolver **never returns NULL**.
 
-**Procurement timeline (immutable ordering):**
+**Procurement timeline (validated ordering):**
 ```
-tender.published_at ≤ tender.closing_date ≤ award.award_date ≤ award.publication_date ≤ award.discovered_at
+tender.published_at ≤ tender.closing_date ≤ award.award_date ≤ award.publication_date ≤ discovered_at
 ```
 
-**Correction logic** (`_validate_award_date` in `award_check.py`):
-1. Parse raw date via `parse_datetime` (rejects year > 2027).
-2. If future → reconstruct year from award's own `publication_date`
-   (same record, best reference). Falls back to tender's `published_at`,
-   then `closing_date`, then century-typo subtraction (`year - 100`).
-3. If before tender's earliest reference → logically impossible, reject → `NULL`.
-4. `NULL` is safer than a fabricated date — downstream consumers silently
-   produce wrong results from wrong dates.
+**Resolution logic** (`_resolve_award_date` in `award_check.py`):
+1. **Direct use** — if raw date parses to a sane date (≤ discovered_at, ≥ tender
+   earliest, ≤ pub_date), use as-is.
+2. **Year correction** — if the raw date has a bad year (future or parse_datetime
+   rejects it via MAX_VALID_YEAR), reconstruct the year using reference dates in
+   priority order: award `publication_date.year` → `tender.published_at.year` →
+   `tender.closing_date.year` → `discovered_at.year` → `discovered_at.year - 1`.
+   Month/day from the raw date is preserved. The corrected date must be ≤
+   discovered_at (the award can't be in the future from when we discovered it).
+3. **Pub-date validation** — if corrected award_date > publication_date, the
+   month/day is also wrong; award_publication_date is used as the award date
+   instead.
+4. **Fallback** — best available proxy: `award.publication_date` →
+   `tender.published_at` → `tender.closing_date` → `discovered_at`.
+5. **Absolute last resort** — `now` (should never be reached since discovered_at ≤ now).
+
+**Key functions:**
+- `_resolve_award_date()` — never returns None, always produces a usable date
+- `_parse_lenient()` — parses without MAX_VALID_YEAR guard for year-correction recovery
+- `parse_datetime()` — strict parse with `MAX_VALID_YEAR = 2027` guard
+- `fix_corrupted_award_dates()` — daily recovery job (4AM default)
 
 **Key files:**
+- `app/jobs/award_check.py` — `_resolve_award_date()`, `fix_corrupted_award_dates()`
 - `app/utils.py` — `parse_datetime()` with `MAX_VALID_YEAR = 2027`
-- `app/jobs/award_check.py` — `_validate_award_date()`, `fix_corrupted_award_dates()`
 - `app/database.py` — `_ensure_award_columns()` adds `publication_date` column
-- `backend/scripts/fix_bad_dates.py` — one-off nullifier for legacy data
 
 ## Tests
 - Located in `backend/tests/`
