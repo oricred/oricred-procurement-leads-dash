@@ -79,101 +79,27 @@ def _award_api_id(raw: dict) -> str:
     return f"award:{hashlib.sha1(identity.encode('utf-8')).hexdigest()[:32]}"
 
 
-def _parse_lenient(raw_date: Any) -> datetime | None:
-    """Parse a date without the MAX_VALID_YEAR guard, for year-correction recovery."""
-    if raw_date is None:
-        return None
-    if isinstance(raw_date, datetime):
-        return raw_date if raw_date.tzinfo else raw_date.replace(tzinfo=timezone.utc)
-    if isinstance(raw_date, str):
-        try:
-            dt = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
-            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-        except ValueError:
-            return None
-    return None
-
-
 def _resolve_award_date(
     raw_date: Any,
-    award_publication_date: datetime | None,
-    tender_published_at: datetime | None,
-    tender_closing_date: datetime | None,
     source_created_at: datetime | None,
     discovered_at: datetime,
     now: datetime,
 ) -> datetime:
-    """Resolve the best possible award date. Never returns None.
+    """Resolve award date. Never returns None.
 
-    The award_date is the core business value — a missing date makes the
-    record useless for client workflows (contacting awarded suppliers to
-    propose funding). This aggressively recovers a usable date:
-
-    1. If raw_date parses to a valid, sane date → use as-is
-    2. If raw year is borderline (2026-2027) → fix year using reference
-       years preserving month/day; if corrected date violates timeline
-       → fall through to step 3
-    3. If raw year is clearly corrupt (>2027, month/day unreliable) →
-       skip year correction, use best available proxy
-    4. Fallback to best available proxy (pub_date → tender dates →
-       source_created_at → discovered_at)
+    Priority:
+    1. Raw date from source — if it parses and is sane, use as-is
+    2. Source created_at — the full timestamp from TSA DB (entire date, no substitution)
+    3. discovered_at — when we first saw the record
     """
-    stricter = parse_datetime(raw_date)
-    lenient = _parse_lenient(raw_date)
+    dt = parse_datetime(raw_date)
+    if dt is not None and dt <= discovered_at:
+        return dt
 
-    # Reference years in priority order (deduped). source_created_at is not
-    # included because its month/day is the source insert timestamp, not the
-    # award date — it's only used as an entire-date fallback in step 3.
-    ref_years: list[int] = []
-    for ref in (award_publication_date, tender_published_at, tender_closing_date):
-        if ref is not None and ref.year <= now.year:
-            ref_years.append(ref.year)
-    ref_years.append(discovered_at.year)
-    if discovered_at.year - 1 >= 2000:
-        ref_years.append(discovered_at.year - 1)
-    ref_years = list(dict.fromkeys(ref_years))
+    if source_created_at is not None and source_created_at <= now:
+        return source_created_at
 
-    # Step 1 — direct use if date is already valid
-    if stricter is not None and stricter <= discovered_at:
-        lower = tender_published_at or tender_closing_date
-        upper = award_publication_date
-        if (lower is None or stricter >= lower) and (upper is None or stricter <= upper):
-            return stricter
-
-    # Step 2 — year correction only for borderline years (month/day plausibly real)
-    if lenient is not None and lenient.year <= MAX_VALID_YEAR:
-        for ref_year in ref_years:
-            try:
-                corrected = lenient.replace(year=ref_year)
-            except (ValueError, OverflowError):
-                continue
-            if corrected <= discovered_at:
-                lower = tender_published_at or tender_closing_date
-                if lower is None or corrected >= lower:
-                    if award_publication_date is None or corrected <= award_publication_date:
-                        if stricter is None or corrected != stricter:
-                            logger.warning(
-                                "award_date_resolved",
-                                original=lenient.isoformat(), resolved=corrected.isoformat(),
-                                ref_year=ref_year,
-                            )
-                        return corrected
-                    if award_publication_date <= discovered_at:
-                        logger.warning(
-                            "award_date_month_wrong_using_pub",
-                            original=lenient.isoformat(), corrected=corrected.isoformat(),
-                            publication_date=award_publication_date.isoformat(),
-                        )
-                        return award_publication_date
-
-    # Step 3 — fallback to best available proxy
-    for candidate in (award_publication_date, tender_published_at, tender_closing_date, source_created_at, discovered_at):
-        if candidate is not None and candidate <= now:
-            if candidate is not discovered_at:
-                logger.warning("award_date_fallback", candidate=candidate.isoformat())
-            return candidate
-
-    return now
+    return discovered_at if discovered_at <= now else now
 
 
 async def _upsert_awarded_company(db, raw: dict, company_by_name: dict[str, dict], now: datetime) -> Company:
@@ -398,8 +324,7 @@ async def check_awards_for_watching(backfill: bool = False):
                 award.publication_date = parse_datetime(raw.get("publication_date"))
                 award.source_created_at = parse_datetime(raw.get("created_at"))
                 award.award_date = _resolve_award_date(
-                    raw.get("award_date"), award.publication_date, tender.published_at, tender.closing_date,
-                    award.source_created_at, award.discovered_at, now,
+                    raw.get("award_date"), award.source_created_at, award.discovered_at, now,
                 )
                 award.bee_level = raw.get("bee_level")
                 award.bee_points = raw.get("bee_points")
@@ -537,9 +462,6 @@ async def fix_corrupted_award_dates() -> int:
 
             recovered = _resolve_award_date(
                 award.raw_payload.get("award_date") if award.raw_payload else None,
-                award.publication_date,
-                tender.published_at if tender else None,
-                tender.closing_date if tender else None,
                 award.source_created_at, award.discovered_at, now,
             )
             if recovered != original:
