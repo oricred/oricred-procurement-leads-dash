@@ -43,7 +43,7 @@ logger = structlog.get_logger()
 
 AWARD_FIELDS = [
     "id", "tender_id", "supplier_name", "amount", "award_date",
-    "bee_level", "bee_points", "supplier_canonical_id",
+    "publication_date", "bee_level", "bee_points", "supplier_canonical_id",
 ]
 TENDER_FIELDS = [
     "id", "tender_id", "title", "description", "estimated_value", "province",
@@ -81,26 +81,24 @@ def _award_api_id(raw: dict) -> str:
 
 def _validate_award_date(
     raw_date: Any,
+    award_publication_date: datetime | None,
     tender_published_at: datetime | None,
     tender_closing_date: datetime | None,
     discovered_at: datetime,
     now: datetime,
 ) -> datetime | None:
-    """Validate and correct a raw award_date against tender context.
+    """Validate and correct a raw award_date against tender and award context.
 
-    Procurement timeline: published_at → closing_date → award_date
-    An award cannot precede its tender's publication or close.
+    Procurement timeline for an award:
+      tender published → tender closes → award decision (award_date)
+      → award published (award.publication_date) → discovered_at
+
+    An award decision cannot precede its tender's close, and its publication
+    cannot precede the decision. The award's own publication_date is the best
+    year reference for century-typo correction because it's on the same
+    record and tightly bounds the award_date from above.
 
     Returns the corrected datetime, or None if the date cannot be validated.
-
-    Rules:
-    1. Parse via parse_datetime (rejects year > 2027).
-    2. Future date → reconstruct year from tender's published_at (the
-       tender's publication era is the best evidence for the award's era).
-       Falls back to closing_date, then century-typo subtraction.
-    3. Date before tender's earliest reference (published_at or closing_date)
-       → logically impossible, reject.
-    4. Otherwise valid.
     """
     parsed = parse_datetime(raw_date)
     if parsed is None:
@@ -110,21 +108,21 @@ def _validate_award_date(
         reference_year: int | None = None
         reference_label = ""
 
-        if tender_published_at and tender_published_at.year <= now.year:
+        if award_publication_date and award_publication_date.year <= now.year:
+            reference_year = award_publication_date.year
+            reference_label = "award_publication_date"
+        elif tender_published_at and tender_published_at.year <= now.year:
             reference_year = tender_published_at.year
-            reference_label = "published_at"
+            reference_label = "tender_published_at"
         elif tender_closing_date and tender_closing_date.year <= now.year:
             reference_year = tender_closing_date.year
-            reference_label = "closing_date"
+            reference_label = "tender_closing_date"
 
         if reference_year is not None:
             corrected = parsed.replace(year=reference_year)
-            lower_bound = tender_published_at or tender_closing_date
-            if lower_bound and corrected < lower_bound:
-                corrected = lower_bound
             if corrected <= now:
                 logger.warning(
-                    "award_date_corrected_from_tender",
+                    "award_date_year_corrected",
                     original=parsed.isoformat(), corrected=corrected.isoformat(),
                     reference=reference_label, reference_year=reference_year,
                 )
@@ -377,8 +375,9 @@ async def check_awards_for_watching(backfill: bool = False):
                 award.supplier_name = supplier
                 award.supplier_company_id = company.api_id
                 award.amount = raw.get("amount")
+                award.publication_date = parse_datetime(raw.get("publication_date"))
                 award.award_date = _validate_award_date(
-                    raw.get("award_date"), tender.published_at, tender.closing_date,
+                    raw.get("award_date"), award.publication_date, tender.published_at, tender.closing_date,
                     award.discovered_at, now,
                 )
                 award.bee_level = raw.get("bee_level")
@@ -496,9 +495,10 @@ async def fix_corrupted_award_dates() -> int:
             pub = tender.published_at if tender and tender.published_at and tender.published_at.year <= MAX_VALID_YEAR else None
             closing = tender.closing_date if tender and tender.closing_date and tender.closing_date.year <= MAX_VALID_YEAR else None
 
+            award_pub = award.publication_date if award.publication_date and award.publication_date.year <= MAX_VALID_YEAR else None
             raw_date = raw_payload.get("award_date")
             if raw_date is not None:
-                recovered = _validate_award_date(raw_date, pub, closing, award.discovered_at, now)
+                recovered = _validate_award_date(raw_date, award_pub, pub, closing, award.discovered_at, now)
                 if recovered and recovered != original:
                     award.award_date = recovered
                     fixed += 1

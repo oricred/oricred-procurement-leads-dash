@@ -26,6 +26,7 @@ class Award(Base):
     supplier_company_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     amount: Mapped[float | None] = mapped_column(Numeric(15, 2), nullable=True)
     award_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    publication_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     bee_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
     bee_points: Mapped[int | None] = mapped_column(Integer, nullable=True)
     buyer_org_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
