@@ -88,18 +88,19 @@ def _validate_award_date(
 ) -> datetime | None:
     """Validate and correct a raw award_date against tender context.
 
+    Procurement timeline: published_at → closing_date → award_date
+    An award cannot precede its tender's publication or close.
+
     Returns the corrected datetime, or None if the date cannot be validated.
 
-    Validation rules:
-    1. Parse the raw value via parse_datetime (rejects year > 2027).
-    2. If the parsed date is in the future (beyond *now*), reconstruct the
-       year from the tender's *published_at* (or closing_date) — the tender's
-       publication era is the best evidence for what year the award belongs to.
-       Fall back to a century-typo subtraction (year - 100) only when no tender
-       date is available.
-    3. If the parsed date is before the tender's closing_date (or published_at
-       when closing is missing), it is logically impossible — reject.
-    4. Otherwise the date is considered valid.
+    Rules:
+    1. Parse via parse_datetime (rejects year > 2027).
+    2. Future date → reconstruct year from tender's published_at (the
+       tender's publication era is the best evidence for the award's era).
+       Falls back to closing_date, then century-typo subtraction.
+    3. Date before tender's earliest reference (published_at or closing_date)
+       → logically impossible, reject.
+    4. Otherwise valid.
     """
     parsed = parse_datetime(raw_date)
     if parsed is None:
@@ -469,12 +470,13 @@ async def find_corrupted_award_dates() -> list[Award]:
 async def fix_corrupted_award_dates() -> int:
     """Repair awards with NULL or obviously-wrong award_date.
 
-    Strategies (applied in order, each validated by _validate_award_date):
-      1. Re-parse from raw_payload (handles cases where the TSA DB corrected
-         the record or the original parse failed for non-year reasons).
-      2. If the award links to a tender with a valid closing_date, use that as
-         a recovery estimate (awards occur after tender closing).
-      3. Fall back to the award's discovered_at as a last-resort upper bound.
+    The ONLY valid recovery is re-parsing the raw payload and applying
+    century-typo correction via _validate_award_date (which uses the
+    tender's published_at year as the reference). If the date cannot be
+    recovered with confidence the award_date stays NULL — a missing date
+    is safer than a fabricated one, because downstream consumers (lead
+    scoring, timing model, buyer relationships) silently produce wrong
+    results from wrong dates.
     """
     from app.utils import MAX_VALID_YEAR
 
@@ -488,34 +490,19 @@ async def fix_corrupted_award_dates() -> int:
         for award in rows:
             original = award.award_date
             raw_payload = award.raw_payload or {}
-            recovered: datetime | None = None
 
-            # Fetch tender context once
             t_result = await db.execute(select(Tender).where(Tender.id == award.tender_id))
             tender = t_result.scalar_one_or_none()
             pub = tender.published_at if tender and tender.published_at and tender.published_at.year <= MAX_VALID_YEAR else None
             closing = tender.closing_date if tender and tender.closing_date and tender.closing_date.year <= MAX_VALID_YEAR else None
 
-            # Strategy 1: re-parse from raw_payload + validate
             raw_date = raw_payload.get("award_date")
             if raw_date is not None:
                 recovered = _validate_award_date(raw_date, pub, closing, award.discovered_at, now)
-                if recovered:
-                    logger.info("award_date_recovered_from_payload", award_id=award.id)
-
-            # Strategy 2: use tender closing_date
-            if not recovered and closing:
-                recovered = closing
-                logger.info("award_date_from_tender_closing", award_id=award.id, closing_date=closing.isoformat())
-
-            # Strategy 3: fall back to discovered_at
-            if not recovered:
-                recovered = award.discovered_at
-                logger.info("award_date_from_discovered_at", award_id=award.id, discovered_at=award.discovered_at.isoformat())
-
-            if recovered and recovered != original:
-                award.award_date = recovered
-                fixed += 1
+                if recovered and recovered != original:
+                    award.award_date = recovered
+                    fixed += 1
+                    logger.info("award_date_recovered_from_payload", award_id=award.id, date=recovered.isoformat())
 
         await db.commit()
         logger.info("corrupted_award_dates_fixed", total=len(rows), fixed=fixed)
