@@ -22,6 +22,10 @@ async def get_db():
             await session.close()
 
 
+AWARD_COLUMNS: dict[str, str] = {
+    "publication_date": "TIMESTAMPTZ",
+}
+
 OPPORTUNITY_COLUMNS = {
     "buyer_preference_score": "NUMERIC(5,2)",
     "related_bidders": "JSON",
@@ -64,8 +68,24 @@ async def _ensure_opportunity_columns() -> None:
         ))
 
 
+async def _ensure_award_columns() -> None:
+    async with engine.begin() as conn:
+        if conn.dialect.name == "sqlite":
+            existing = {
+                row[1]
+                for row in (await conn.execute(text("PRAGMA table_info(awards)"))).fetchall()
+            }
+            for name, definition in AWARD_COLUMNS.items():
+                if name not in existing:
+                    await conn.execute(text(f"ALTER TABLE awards ADD COLUMN {name} {definition}"))
+            return
+        for name, definition in AWARD_COLUMNS.items():
+            await conn.execute(text(f"ALTER TABLE awards ADD COLUMN IF NOT EXISTS {name} {definition}"))
+
+
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await _ensure_opportunity_columns()
+    await _ensure_award_columns()
     logger.info("database_ready", dialect=engine.dialect.name)
