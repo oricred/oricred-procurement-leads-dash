@@ -1,7 +1,9 @@
 import hashlib
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
+
+from app.utils import parse_datetime
 
 import structlog
 from sqlalchemy import select
@@ -46,21 +48,6 @@ def _award_key(raw: dict[str, Any]) -> str:
     basis = "|".join(str(raw.get(k) or "") for k in ("supplier_name", "tender_id", "award_date", "amount"))
     return "synthetic:" + hashlib.sha1(basis.encode("utf-8")).hexdigest()[:40]
 
-
-def _as_datetime(value: Any) -> datetime | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    if isinstance(value, date):
-        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
-    if isinstance(value, str):
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-        except ValueError:
-            return None
-    return None
 
 
 def _as_decimal(value: Any) -> Decimal | None:
@@ -173,7 +160,7 @@ async def sync_historical_contacts(limit: int = 1000, cutoff_days: int = HISTORI
 
                 seen = list(historical.award_ids or [])
                 key = _award_key(raw)
-                award_date = _as_datetime(raw.get("award_date"))
+                award_date = parse_datetime(raw.get("award_date"))
                 amount = _as_decimal(raw.get("amount"))
 
                 if key not in seen:
@@ -182,8 +169,8 @@ async def sync_historical_contacts(limit: int = 1000, cutoff_days: int = HISTORI
                     if amount is not None:
                         current_total = _as_decimal(historical.total_award_value) or Decimal("0")
                         historical.total_award_value = current_total + amount
-                    first_award_date = _as_datetime(historical.first_award_date)
-                    last_award_date = _as_datetime(historical.last_award_date)
+                    first_award_date = parse_datetime(historical.first_award_date)
+                    last_award_date = parse_datetime(historical.last_award_date)
                     if award_date and (first_award_date is None or award_date < first_award_date):
                         historical.first_award_date = award_date
                     if award_date and (last_award_date is None or award_date > last_award_date):

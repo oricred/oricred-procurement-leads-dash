@@ -5,7 +5,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import or_, select
+
+
+from app.utils import parse_datetime
 
 
 def _sanitize(value: Any) -> Any:
@@ -16,18 +19,6 @@ def _sanitize(value: Any) -> Any:
     if isinstance(value, list):
         return [_sanitize(v) for v in value]
     return value
-
-
-def _ensure_aware(value: object) -> datetime | None:
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    if isinstance(value, str):
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-        except ValueError:
-            return None
-    return None
 
 from app.clients import TSADatabase
 from app.database import async_session
@@ -88,16 +79,58 @@ def _award_api_id(raw: dict) -> str:
     return f"award:{hashlib.sha1(identity.encode('utf-8')).hexdigest()[:32]}"
 
 
-def _award_timestamp(value: object) -> datetime | None:
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    if isinstance(value, str):
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-        except ValueError:
-            return None
-    return None
+def _validate_award_date(
+    raw_date: Any,
+    tender_closing_date: datetime | None,
+    discovered_at: datetime,
+    now: datetime,
+) -> datetime | None:
+    """Validate and correct a raw award_date against tender context.
+
+    Returns the corrected datetime, or None if the date cannot be validated.
+
+    Validation rules:
+    1. Parse the raw value via parse_datetime (rejects year > 2027).
+    2. If the parsed date is in the future (beyond now), try a century-typo
+       correction: subtract 100 years. Accept if the result is on or after the
+       tender's closing_date and not itself in the future.
+    3. If the parsed date is before the tender's closing_date, it is logically
+       impossible (an award cannot precede its tender's close) — reject.
+    4. Otherwise the date is considered valid.
+    """
+    parsed = parse_datetime(raw_date)
+    if parsed is None:
+        return None
+
+    if parsed > now:
+        corrected = parsed.replace(year=parsed.year - 100)
+        if tender_closing_date and tender_closing_date <= corrected <= now:
+            logger.warning(
+                "award_date_century_typo_corrected",
+                original=parsed.isoformat(), corrected=corrected.isoformat(),
+                closing_date=tender_closing_date.isoformat(),
+            )
+            return corrected
+        if not tender_closing_date and corrected.year >= 2000 and corrected <= now:
+            logger.warning(
+                "award_date_century_typo_corrected_no_closing",
+                original=parsed.isoformat(), corrected=corrected.isoformat(),
+            )
+            return corrected
+        logger.warning(
+            "award_date_future_unrecoverable",
+            original=parsed.isoformat(), year=parsed.year,
+        )
+        return None
+
+    if tender_closing_date and parsed < tender_closing_date:
+        logger.warning(
+            "award_date_before_closing",
+            award_date=parsed.isoformat(), closing_date=tender_closing_date.isoformat(),
+        )
+        return None
+
+    return parsed
 
 
 async def _upsert_awarded_company(db, raw: dict, company_by_name: dict[str, dict], now: datetime) -> Company:
@@ -154,7 +187,7 @@ async def _upsert_tender_for_award(db, raw: dict, metadata: dict | None, now: da
             estimated_value=metadata.get("estimated_value"),
             province=metadata.get("province"),
             category_id=metadata.get("category_id"),
-            closing_date=_ensure_aware(metadata.get("closing_date")),
+            closing_date=parse_datetime(metadata.get("closing_date")),
             buyer_org_id=buyer_org_id,
             tender_type=metadata.get("type"),
             published_at=metadata.get("publication_date"),
@@ -169,10 +202,10 @@ async def _upsert_tender_for_award(db, raw: dict, metadata: dict | None, now: da
         tender.estimated_value = metadata.get("estimated_value") or tender.estimated_value
         tender.province = metadata.get("province") or tender.province
         tender.category_id = metadata.get("category_id") or tender.category_id
-        tender.closing_date = _ensure_aware(metadata.get("closing_date")) or tender.closing_date
+        tender.closing_date = parse_datetime(metadata.get("closing_date")) or tender.closing_date
         tender.buyer_org_id = buyer_org_id or tender.buyer_org_id
         tender.tender_type = metadata.get("type") or tender.tender_type
-        tender.published_at = _ensure_aware(metadata.get("publication_date")) or tender.published_at
+        tender.published_at = parse_datetime(metadata.get("publication_date")) or tender.published_at
     return tender
 
 
@@ -319,11 +352,14 @@ async def check_awards_for_watching(backfill: bool = False):
                 award.supplier_name = supplier
                 award.supplier_company_id = company.api_id
                 award.amount = raw.get("amount")
-                award.award_date = _ensure_aware(raw.get("award_date"))
+                award.award_date = _validate_award_date(
+                    raw.get("award_date"), tender.closing_date,
+                    award.discovered_at, now,
+                )
                 award.bee_level = raw.get("bee_level")
                 award.bee_points = raw.get("bee_points")
                 award.buyer_org_id = tender.buyer_org_id
-                timestamp = _award_timestamp(raw.get("award_date"))
+                timestamp = award.award_date
                 if timestamp:
                     ingested_award_timestamps.append(timestamp)
 
@@ -359,12 +395,16 @@ async def check_awards_for_watching(backfill: bool = False):
 
             await _mark_overdue_watches(db, email, now)
             if ingested_award_timestamps:
-                latest_award_at = max(ingested_award_timestamps)
-                if not state:
-                    state = AwardIngestionState(source="tenders_sa", latest_award_at=latest_award_at)
-                    db.add(state)
-                elif not state.latest_award_at or latest_award_at > state.latest_award_at:
-                    state.latest_award_at = latest_award_at
+                valid_timestamps = [ts for ts in ingested_award_timestamps if ts <= now]
+                if valid_timestamps:
+                    latest_award_at = max(valid_timestamps)
+                    if not state:
+                        state = AwardIngestionState(source="tenders_sa", latest_award_at=latest_award_at)
+                        db.add(state)
+                    elif not state.latest_award_at or latest_award_at > state.latest_award_at:
+                        state.latest_award_at = latest_award_at
+                else:
+                    logger.warning("all_award_timestamps_in_future", count=len(ingested_award_timestamps))
             await db.commit()
 
             contacts_added = 0
@@ -386,6 +426,75 @@ async def check_awards_for_watching(backfill: bool = False):
             return len(raw_awards)
     finally:
         await tsa_db.close()
+
+
+async def find_corrupted_award_dates() -> list[Award]:
+    """Return all awards with NULL or obviously-wrong award_date for reporting/debugging."""
+    async with async_session() as db:
+        corrupt = await db.execute(
+            select(Award).where(
+                or_(
+                    Award.award_date.is_(None),
+                    Award.award_date > datetime.now(timezone.utc),
+                )
+            )
+        )
+        return list(corrupt.scalars().all())
+
+
+async def fix_corrupted_award_dates() -> int:
+    """Repair awards with NULL or obviously-wrong award_date.
+
+    Strategies (applied in order, each validated by _validate_award_date):
+      1. Re-parse from raw_payload (handles cases where the TSA DB corrected
+         the record or the original parse failed for non-year reasons).
+      2. If the award links to a tender with a valid closing_date, use that as
+         a recovery estimate (awards occur after tender closing).
+      3. Fall back to the award's discovered_at as a last-resort upper bound.
+    """
+    from app.utils import MAX_VALID_YEAR
+
+    async with async_session() as db:
+        rows = await find_corrupted_award_dates()
+        if not rows:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        fixed = 0
+        for award in rows:
+            original = award.award_date
+            raw_payload = award.raw_payload or {}
+            recovered: datetime | None = None
+
+            # Fetch tender context once
+            t_result = await db.execute(select(Tender).where(Tender.id == award.tender_id))
+            tender = t_result.scalar_one_or_none()
+            closing = tender.closing_date if tender and tender.closing_date and tender.closing_date.year <= MAX_VALID_YEAR else None
+
+            # Strategy 1: re-parse from raw_payload + validate
+            raw_date = raw_payload.get("award_date")
+            if raw_date is not None:
+                recovered = _validate_award_date(raw_date, closing, award.discovered_at, now)
+                if recovered:
+                    logger.info("award_date_recovered_from_payload", award_id=award.id)
+
+            # Strategy 2: use tender closing_date
+            if not recovered and closing:
+                recovered = closing
+                logger.info("award_date_from_tender_closing", award_id=award.id, closing_date=closing.isoformat())
+
+            # Strategy 3: fall back to discovered_at
+            if not recovered:
+                recovered = award.discovered_at
+                logger.info("award_date_from_discovered_at", award_id=award.id, discovered_at=award.discovered_at.isoformat())
+
+            if recovered and recovered != original:
+                award.award_date = recovered
+                fixed += 1
+
+        await db.commit()
+        logger.info("corrupted_award_dates_fixed", total=len(rows), fixed=fixed)
+        return fixed
 
 
 async def backfill_recent_awards() -> int:

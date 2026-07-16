@@ -78,6 +78,7 @@ DEFAULT_JOBS = {
     "sync_crm": {"enabled": True, "cron": "30 * * * *", "description": "Sync CRM activity from Monday.com"},
     "contact_enrichment": {"enabled": True, "cron": "0 3 * * 1,4", "description": "Enrich contacts from Tenders-SA"},
     "historical_contacts": {"enabled": True, "cron": "30 2 * * *", "description": "Import historical awarded companies and contacts"},
+    "fix_corrupted_award_dates": {"enabled": True, "cron": "0 4 * * *", "description": "Repair awards with NULL or future dates"},
 }
 
 CONFIG_DEFAULTS: dict[str, tuple[dict, str]] = {

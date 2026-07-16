@@ -6,7 +6,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.database import async_session
-from app.jobs.award_check import check_awards_for_watching
+from app.jobs.award_check import check_awards_for_watching, fix_corrupted_award_dates
 from app.jobs.contact_enrichment import run_contact_enrichment
 from app.jobs.crm_sync import sync_crm
 from app.jobs.discovery import discover_new_tenders
@@ -26,6 +26,7 @@ JOB_HANDLERS: dict[str, tuple[str, JobHandler]] = {
     "sync_crm": ("Sync CRM activity", sync_crm),
     "contact_enrichment": ("Enrich contacts from TSA DB", run_contact_enrichment),
     "historical_contacts": ("Sync historical awarded companies", sync_historical_contacts_job),
+    "fix_corrupted_award_dates": ("Fix corrupted award dates", fix_corrupted_award_dates),
 }
 
 

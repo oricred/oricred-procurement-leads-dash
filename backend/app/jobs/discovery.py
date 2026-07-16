@@ -6,6 +6,9 @@ import structlog
 from sqlalchemy import select
 
 
+from app.utils import parse_datetime
+
+
 def _sanitize(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -14,18 +17,6 @@ def _sanitize(value: Any) -> Any:
     if isinstance(value, list):
         return [_sanitize(v) for v in value]
     return value
-
-
-def _ensure_aware(value: object) -> datetime | None:
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    if isinstance(value, str):
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-        except ValueError:
-            return None
-    return None
 
 from app.clients import TSADatabase
 from app.database import async_session
@@ -83,10 +74,10 @@ async def _process_tender(raw: dict, db, now: datetime) -> int:
         estimated_value=raw.get("estimated_value"),
         province=raw.get("province"),
         category_id=raw.get("category_id"),
-        closing_date=_ensure_aware(raw.get("closing_date")),
+        closing_date=parse_datetime(raw.get("closing_date")),
         buyer_org_id=org_id,
         tender_type=raw.get("type"),
-        published_at=_ensure_aware(raw.get("publication_date")),
+        published_at=parse_datetime(raw.get("publication_date")),
         discovered_at=now,
     )
     db.add(tender)
