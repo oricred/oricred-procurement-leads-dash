@@ -192,6 +192,32 @@ new_lead → client_contacted → qualified_lead → won_opportunity → credit_
 ### Phase 3 — Predictive Intelligence (Not started)
 - Deferred until ≥12 months of historical data accumulated
 
+## Award Date Domain Rules
+
+The `award_date` on the `awards` table represents the date the contract was
+**awarded/decided** — not the publication date. The TSA DB source can have
+century typos (e.g. `2099` instead of `1999`/`2025`).
+
+**Procurement timeline (immutable ordering):**
+```
+tender.published_at ≤ tender.closing_date ≤ award.award_date ≤ award.publication_date ≤ award.discovered_at
+```
+
+**Correction logic** (`_validate_award_date` in `award_check.py`):
+1. Parse raw date via `parse_datetime` (rejects year > 2027).
+2. If future → reconstruct year from award's own `publication_date`
+   (same record, best reference). Falls back to tender's `published_at`,
+   then `closing_date`, then century-typo subtraction (`year - 100`).
+3. If before tender's earliest reference → logically impossible, reject → `NULL`.
+4. `NULL` is safer than a fabricated date — downstream consumers silently
+   produce wrong results from wrong dates.
+
+**Key files:**
+- `app/utils.py` — `parse_datetime()` with `MAX_VALID_YEAR = 2027`
+- `app/jobs/award_check.py` — `_validate_award_date()`, `fix_corrupted_award_dates()`
+- `app/database.py` — `_ensure_award_columns()` adds `publication_date` column
+- `backend/scripts/fix_bad_dates.py` — one-off nullifier for legacy data
+
 ## Tests
 - Located in `backend/tests/`
 - Run with: `cd backend && .venv/bin/pytest` (53 tests for contacts, TSADatabase, competitor intel)
