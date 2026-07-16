@@ -8,7 +8,7 @@ import structlog
 from sqlalchemy import or_, select
 
 
-from app.utils import parse_datetime
+from app.utils import MAX_VALID_YEAR, parse_datetime
 
 
 def _sanitize(value: Any) -> Any:
@@ -109,9 +109,11 @@ def _resolve_award_date(
     propose funding). This aggressively recovers a usable date:
 
     1. If raw_date parses to a valid, sane date → use as-is
-    2. If raw_date has a bad year → fix using reference years (pub_date →
-       tender dates → discovered_at → prior year) preserving month/day
-    3. If corrected date violates award ≤ pub_date → use pub_date instead
+    2. If raw year is borderline (2026-2027) → fix year using reference
+       years preserving month/day; if corrected date violates timeline
+       → fall through to step 3
+    3. If raw year is clearly corrupt (>2027, month/day unreliable) →
+       skip year correction, use best available proxy
     4. Fallback to best available proxy (pub_date → tender dates → discovered_at)
     """
     stricter = parse_datetime(raw_date)
@@ -134,12 +136,11 @@ def _resolve_award_date(
         if (lower is None or stricter >= lower) and (upper is None or stricter <= upper):
             return stricter
 
-    # Step 2 — year correction (preserve month/day from raw date)
-    dt = stricter or lenient
-    if dt is not None:
+    # Step 2 — year correction only for borderline years (month/day plausibly real)
+    if lenient is not None and lenient.year <= MAX_VALID_YEAR:
         for ref_year in ref_years:
             try:
-                corrected = dt.replace(year=ref_year)
+                corrected = lenient.replace(year=ref_year)
             except (ValueError, OverflowError):
                 continue
             if corrected <= discovered_at:
@@ -149,14 +150,14 @@ def _resolve_award_date(
                         if stricter is None or corrected != stricter:
                             logger.warning(
                                 "award_date_resolved",
-                                original=dt.isoformat(), resolved=corrected.isoformat(),
+                                original=lenient.isoformat(), resolved=corrected.isoformat(),
                                 ref_year=ref_year,
                             )
                         return corrected
                     if award_publication_date <= discovered_at:
                         logger.warning(
                             "award_date_month_wrong_using_pub",
-                            original=dt.isoformat(), corrected=corrected.isoformat(),
+                            original=lenient.isoformat(), corrected=corrected.isoformat(),
                             publication_date=award_publication_date.isoformat(),
                         )
                         return award_publication_date
@@ -468,19 +469,42 @@ async def check_awards_for_watching(backfill: bool = False):
 
 
 async def find_corrupted_award_dates(db=None) -> list[Award]:
-    """Return all awards with NULL or obviously-wrong award_date for reporting/debugging."""
+    """Return all awards with NULL, future, or raw-year-corrupted award_date."""
     if db is None:
         async with async_session() as s:
             return await find_corrupted_award_dates(s)
+    now = datetime.now(timezone.utc)
     corrupt = await db.execute(
         select(Award).where(
             or_(
                 Award.award_date.is_(None),
-                Award.award_date > datetime.now(timezone.utc),
+                Award.award_date > now,
             )
         )
     )
-    return list(corrupt.scalars().all())
+    result: list[Award] = list(corrupt.scalars().all())
+
+    # Also find records whose raw payload has a clearly-corrupt year (> MAX_VALID_YEAR)
+    # even if the stored date was already corrected by a previous recovery run.
+    extras = await db.execute(
+        select(Award).where(
+            Award.raw_payload.isnot(None),
+            Award.award_date.isnot(None),
+            Award.award_date <= now,
+        )
+    )
+    for award in extras.scalars().all():
+        payload = award.raw_payload or {}
+        raw_date = payload.get("award_date") if isinstance(payload, dict) else None
+        if raw_date and isinstance(raw_date, str) and len(raw_date) >= 4:
+            try:
+                raw_year = int(raw_date[:4])
+            except ValueError:
+                continue
+            if raw_year > MAX_VALID_YEAR:
+                result.append(award)
+
+    return result
 
 
 async def fix_corrupted_award_dates() -> int:
