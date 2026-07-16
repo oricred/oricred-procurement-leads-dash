@@ -43,7 +43,7 @@ logger = structlog.get_logger()
 
 AWARD_FIELDS = [
     "id", "tender_id", "supplier_name", "amount", "award_date",
-    "publication_date", "bee_level", "bee_points", "supplier_canonical_id",
+    "bee_level", "bee_points", "supplier_canonical_id",
 ]
 TENDER_FIELDS = [
     "id", "tender_id", "title", "description", "estimated_value", "province",

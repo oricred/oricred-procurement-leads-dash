@@ -157,6 +157,8 @@ def client_and_mock():
     mock_session = AsyncMock()
     # Use MagicMock for execute results so .all(), .scalar_one_or_none() are sync
     mock_session.execute.return_value = MagicMock()
+    # db.get() is used by watchlist route to look up category name
+    mock_session.get.return_value = None
 
     async def override_get_db():
         yield mock_session
