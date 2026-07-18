@@ -56,6 +56,8 @@ export const opportunities = {
 export const leads = {
   list: (params?: Record<string, unknown>) =>
     api.get<{ items: Opportunity[]; total: number }>('/leads', { params }),
+  export: (params?: Record<string, unknown>) =>
+    api.get<Blob>('/leads/export', { params, responseType: 'blob' }),
 };
 export const radar = {
   get: () => api.get<RadarData>('/radar'),

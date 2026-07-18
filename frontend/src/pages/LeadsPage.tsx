@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Mail, Phone, Search, UserRound, RefreshCcw, ArrowRightCircle } from 'lucide-react';
+import { Mail, Phone, Search, UserRound, RefreshCcw, ArrowRightCircle, Download } from 'lucide-react';
 import { leads } from '../services/api';
 import type { Opportunity } from '../types';
 import OpportunityModal from '../components/OpportunityModal';
@@ -28,6 +28,7 @@ export default function LeadsPage() {
   const [selectedOpp, setSelectedOpp] = useState<Opportunity | null>(null);
   const [query, setQuery] = useState('');
   const [contactability, setContactability] = useState('');
+  const [isExporting, setIsExporting] = useState(false);
 
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['leads', contactability],
@@ -51,6 +52,24 @@ export default function LeadsPage() {
     );
   }, [data?.items, query]);
 
+  const exportCsv = async () => {
+    setIsExporting(true);
+    try {
+      const response = await leads.export({
+        stage: 'new_lead',
+        contactability: contactability || undefined,
+        search: query.trim() || undefined,
+      });
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'oricred-leads.csv';
+      link.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setIsExporting(false);
+    }
+  };
   return (
     <div className="h-full flex flex-col min-w-0">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4">
@@ -77,6 +96,14 @@ export default function LeadsPage() {
             <option value="contactable">Contactable</option>
             <option value="needs_contact">Needs contact</option>
           </select>
+          <button
+            onClick={exportCsv}
+            disabled={isExporting}
+            className="inline-flex items-center gap-1.5 rounded bg-primary-500 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-primary-400 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Download className="w-3.5 h-3.5" />
+            {isExporting ? 'Exporting...' : 'Export CSV'}
+          </button>
         </div>
       </div>
 

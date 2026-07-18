@@ -1,6 +1,9 @@
+import csv
+import io
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -79,3 +82,41 @@ async def list_leads(
         contacts = await _load_opportunity_contacts(opp, db)
         items.append(_opportunity_to_read(opp, tender, award, company, contacts, None, category_name))
     return OpportunityList(items=items, total=len(items))
+
+@router.get("/export")
+async def export_leads(
+    stage: str | None = Query(None), assigned_to: str | None = Query(None),
+    contactability: str | None = Query(None), priority_min: float | None = Query(None),
+    province: str | None = Query(None), buyer_org_id: str | None = Query(None),
+    category: str | None = Query(None), risk_flag: str | None = Query(None),
+    next_action: str | None = Query(None), value_min: float | None = Query(None),
+    award_recency_days: int | None = Query(None, ge=1), search: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export every lead matching the supplied inbox filters as CSV."""
+    leads = await list_leads(
+        stage, assigned_to, contactability, priority_min, province, buyer_org_id,
+        category, risk_flag, next_action, value_min, award_recency_days, search, db,
+    )
+    stream = io.StringIO(newline="")
+    writer = csv.writer(stream)
+    writer.writerow([
+        "lead_id", "company", "contact_name", "contact_job_title", "contact_email",
+        "contact_phone", "contact_status", "award_value", "award_date", "buyer",
+        "tender", "province", "category", "priority_score", "next_action", "assigned_to",
+    ])
+    for lead in leads.items:
+        contact = lead.primary_contact
+        writer.writerow([
+            lead.id, lead.company_name, f"{contact.first_name} {contact.last_name}" if contact else None,
+            contact.job_title if contact else None, contact.email if contact else None,
+            (contact.phone_direct or contact.phone_mobile) if contact else None,
+            lead.contact_sufficiency, lead.source_award_value or lead.award_value,
+            lead.source_award_date, lead.buyer_org, lead.source_tender_title, lead.province,
+            lead.category_name or lead.category, lead.lead_priority_score, lead.next_action,
+            lead.assigned_to,
+        ])
+    return StreamingResponse(
+        iter([stream.getvalue()]), media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=oricred-leads.csv"},
+    )
