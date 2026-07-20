@@ -94,11 +94,11 @@ function DecliningDialog({ opp, onConfirm, onCancel, pending }: {
   );
 }
 
-const collisionDetection: CollisionDetection = useCallback((args) => {
+function collisionDetection(args: Parameters<CollisionDetection>[0]): ReturnType<CollisionDetection> {
   const pointerCollisions = pointerWithin(args);
   if (pointerCollisions.length > 0) return pointerCollisions;
   return closestCorners(args);
-}, []);
+}
 
 export default function PipelinePage() {
   const queryClient = useQueryClient();
