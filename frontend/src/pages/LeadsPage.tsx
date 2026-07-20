@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Mail, Phone, Search, UserRound, RefreshCcw, ArrowRightCircle, Download } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Mail, Phone, Search, UserRound, RefreshCcw, ArrowRightCircle, Download } from 'lucide-react';
 import { leads } from '../services/api';
 import type { Opportunity } from '../types';
 import OpportunityModal from '../components/OpportunityModal';
@@ -31,18 +31,24 @@ export default function LeadsPage() {
   const [query, setQuery] = useState('');
   const [contactability, setContactability] = useState('');
   const [isExporting, setIsExporting] = useState(false);
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
 
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ['leads', contactability],
+    queryKey: ['leads', contactability, page],
     queryFn: async () => {
       const res = await leads.list({
         stage: 'new_lead',
         contactability: contactability || undefined,
+        limit: pageSize,
+        offset: (page - 1) * pageSize,
       });
       return res.data;
     },
     refetchInterval: 30_000,
   });
+
+  const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / pageSize));
 
   const items = useMemo(() => {
     const all = data?.items ?? [];
@@ -177,6 +183,29 @@ export default function LeadsPage() {
           </tbody>
         </table>
       </div>
+
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between mt-3 text-xs text-gray-500">
+          <span>{data?.total ?? 0} total</span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="p-1 rounded hover:bg-surface-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="text-gray-400">{page} / {totalPages}</span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              className="p-1 rounded hover:bg-surface-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {isFetching && !isLoading && <div className="mt-2 text-xs text-gray-600">Refreshing...</div>}
       {selectedOpp && <OpportunityModal opportunity={selectedOpp} onClose={() => setSelectedOpp(null)} />}

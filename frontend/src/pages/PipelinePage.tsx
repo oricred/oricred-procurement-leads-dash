@@ -109,9 +109,11 @@ export default function PipelinePage() {
   const [declining, setDeclining] = useState<Opportunity | null>(null);
   const [dndError, setDndError] = useState<string | null>(null);
 
+  const PIPELINE_LIMIT = 200;
+
   const { data, isLoading } = useQuery({
     queryKey: ['opportunities'],
-    queryFn: async () => (await opportunities.list()).data,
+    queryFn: async () => (await opportunities.list({ limit: PIPELINE_LIMIT, offset: 0 })).data,
     refetchInterval: 15_000,
   });
 

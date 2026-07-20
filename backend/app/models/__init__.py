@@ -16,6 +16,7 @@ from app.models.user import User
 from app.models.buyer_relationship import BuyerRelationship
 from app.models.contact import Contact
 from app.models.historical_contact import HistoricalContact
+from app.models.historical_ingestion_state import HistoricalIngestionState
 
 __all__ = [
     "Tender",
@@ -37,4 +38,5 @@ __all__ = [
     "BuyerRelationship",
     "Contact",
     "HistoricalContact",
+    "HistoricalIngestionState",
 ]

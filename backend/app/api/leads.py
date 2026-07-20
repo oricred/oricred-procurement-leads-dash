@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.opportunities import _batch_load_opportunity_context, _opportunity_to_read
@@ -20,21 +20,10 @@ router = APIRouter(prefix="/leads", tags=["leads"])
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
 
 
-@router.get("", response_model=OpportunityList)
-async def list_leads(
-    stage: str | None = Query(None),
-    assigned_to: str | None = Query(None),
-    contactability: str | None = Query(None),
-    priority_min: float | None = Query(None),
-    province: str | None = Query(None),
-    buyer_org_id: str | None = Query(None),
-    category: str | None = Query(None),
-    risk_flag: str | None = Query(None),
-    next_action: str | None = Query(None),
-    value_min: float | None = Query(None),
-    award_recency_days: int | None = Query(None, ge=1),
-    search: str | None = Query(None),
-    db: AsyncSession = Depends(get_db),
+async def _build_leads_query(
+    stage=None, assigned_to=None, contactability=None, priority_min=None,
+    province=None, buyer_org_id=None, category=None, risk_flag=None,
+    next_action=None, value_min=None, award_recency_days=None, search=None,
 ):
     q = (
         select(Opportunity)
@@ -84,13 +73,60 @@ async def list_leads(
         Award.award_date.desc().nulls_last(),
         Opportunity.created_at.desc(),
     )
+    return q
+
+
+async def _fetch_leads(
+    db: AsyncSession,
+    stage=None, assigned_to=None, contactability=None, priority_min=None,
+    province=None, buyer_org_id=None, category=None, risk_flag=None,
+    next_action=None, value_min=None, award_recency_days=None, search=None,
+    limit: int | None = None, offset: int = 0,
+):
+    q = await _build_leads_query(
+        stage, assigned_to, contactability, priority_min, province,
+        buyer_org_id, category, risk_flag, next_action, value_min,
+        award_recency_days, search,
+    )
+
+    count_q = select(func.count()).select_from(q.subquery())
+    total_result = await db.execute(count_q)
+    total = total_result.scalar() or 0
+
+    if limit is not None:
+        q = q.limit(limit).offset(offset)
 
     result = await db.execute(q)
     opportunities = result.scalars().all()
     context = await _batch_load_opportunity_context(opportunities, db)
 
     items = [_opportunity_to_read(opp, **context[opp.id]) for opp in opportunities]
-    return OpportunityList(items=items, total=len(items))
+    return OpportunityList(items=items, total=total)
+
+
+@router.get("", response_model=OpportunityList)
+async def list_leads(
+    stage: str | None = Query(None),
+    assigned_to: str | None = Query(None),
+    contactability: str | None = Query(None),
+    priority_min: float | None = Query(None),
+    province: str | None = Query(None),
+    buyer_org_id: str | None = Query(None),
+    category: str | None = Query(None),
+    risk_flag: str | None = Query(None),
+    next_action: str | None = Query(None),
+    value_min: float | None = Query(None),
+    award_recency_days: int | None = Query(None, ge=1),
+    search: str | None = Query(None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _fetch_leads(
+        db, stage, assigned_to, contactability, priority_min, province,
+        buyer_org_id, category, risk_flag, next_action, value_min,
+        award_recency_days, search, limit=limit, offset=offset,
+    )
 
 
 @router.get("/export")
@@ -110,20 +146,10 @@ async def export_leads(
     db: AsyncSession = Depends(get_db),
 ):
     """Export every lead matching the supplied inbox filters as CSV."""
-    leads = await list_leads(
-        stage,
-        assigned_to,
-        contactability,
-        priority_min,
-        province,
-        buyer_org_id,
-        category,
-        risk_flag,
-        next_action,
-        value_min,
-        award_recency_days,
-        search,
-        db,
+    leads = await _fetch_leads(
+        db, stage, assigned_to, contactability, priority_min, province,
+        buyer_org_id, category, risk_flag, next_action, value_min,
+        award_recency_days, search, limit=None,
     )
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)

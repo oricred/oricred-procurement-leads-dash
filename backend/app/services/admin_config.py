@@ -79,6 +79,8 @@ DEFAULT_JOBS = {
     "contact_enrichment": {"enabled": True, "cron": "0 3 * * 1,4", "description": "Enrich contacts from Tenders-SA"},
     "historical_contacts": {"enabled": True, "cron": "30 2 * * *", "description": "Import historical awarded companies and contacts"},
     "fix_corrupted_award_dates": {"enabled": True, "cron": "0 4 * * *", "description": "Repair awards with NULL or future dates"},
+    "backfill_historical_awards": {"enabled": False, "cron": "0 1 * * *", "description": "Backfill all historical awards (date-chunked, one-time)"},
+    "backfill_historical_tenders": {"enabled": False, "cron": "0 2 * * *", "description": "Backfill tender stubs from historical award ingestion"},
 }
 
 CONFIG_DEFAULTS: dict[str, tuple[dict, str]] = {

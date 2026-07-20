@@ -1,5 +1,6 @@
 from collections import defaultdict
 from datetime import datetime, timezone
+from itertools import islice
 from decimal import Decimal
 
 import structlog
@@ -54,6 +55,11 @@ async def _load_opportunity_contacts(opp: Opportunity, db: AsyncSession) -> list
     return [ContactRead.model_validate(c) for c in contacts]
 
 
+def _batched_ids(ids: set[str], size: int = 1000):
+    it = iter(ids)
+    return [list(islice(it, size)) for _ in range((len(ids) + size - 1) // size)]
+
+
 async def _batch_load_opportunity_context(opportunities: list[Opportunity], db: AsyncSession) -> dict[str, dict]:
     """Batch-load all related entities for a list of opportunities — fixes N+1."""
     tender_ids = {o.tender_id for o in opportunities if o.tender_id}
@@ -62,44 +68,51 @@ async def _batch_load_opportunity_context(opportunities: list[Opportunity], db: 
 
     tenders: dict[str, Tender] = {}
     if tender_ids:
-        for t in (await db.execute(select(Tender).where(Tender.id.in_(tender_ids)))).scalars().all():
-            tenders[t.id] = t
+        for batch in _batched_ids(tender_ids):
+            for t in (await db.execute(select(Tender).where(Tender.id.in_(batch)))).scalars().all():
+                tenders[t.id] = t
 
     awards: dict[str, Award] = {}
     if award_ids:
-        for a in (await db.execute(select(Award).where(Award.id.in_(award_ids)))).scalars().all():
-            awards[a.id] = a
+        for batch in _batched_ids(award_ids):
+            for a in (await db.execute(select(Award).where(Award.id.in_(batch)))).scalars().all():
+                awards[a.id] = a
 
     companies: dict[str, Company] = {}
     if company_ids:
-        for c in (await db.execute(select(Company).where(Company.id.in_(company_ids)))).scalars().all():
-            companies[c.id] = c
+        for batch in _batched_ids(company_ids):
+            for c in (await db.execute(select(Company).where(Company.id.in_(batch)))).scalars().all():
+                companies[c.id] = c
 
     org_ids = {t.buyer_org_id for t in tenders.values() if t.buyer_org_id}
     orgs: dict[str, Organization] = {}
     if org_ids:
-        for o in (await db.execute(select(Organization).where(Organization.id.in_(org_ids)))).scalars().all():
-            orgs[o.id] = o
+        for batch in _batched_ids(org_ids):
+            for o in (await db.execute(select(Organization).where(Organization.id.in_(batch)))).scalars().all():
+                orgs[o.id] = o
 
     category_ids = {t.category_id for t in tenders.values() if t.category_id}
     categories: dict[str, Category] = {}
     if category_ids:
-        for cat in (await db.execute(select(Category).where(Category.id.in_(category_ids)))).scalars().all():
-            categories[cat.id] = cat
+        for batch in _batched_ids(category_ids):
+            for cat in (await db.execute(select(Category).where(Category.id.in_(batch)))).scalars().all():
+                categories[cat.id] = cat
 
     contacts_by_company: dict[str, list[Contact]] = defaultdict(list)
     if company_ids:
-        for c in (await db.execute(
-            select(Contact).where(Contact.company_id.in_(company_ids)).order_by(Contact.is_primary.desc(), Contact.last_name)
-        )).scalars().all():
-            contacts_by_company[c.company_id].append(c)
+        for batch in _batched_ids(company_ids):
+            for c in (await db.execute(
+                select(Contact).where(Contact.company_id.in_(batch)).order_by(Contact.is_primary.desc(), Contact.last_name)
+            )).scalars().all():
+                contacts_by_company[c.company_id].append(c)
 
     contacts_by_org: dict[str, list[Contact]] = defaultdict(list)
     if org_ids:
-        for c in (await db.execute(
-            select(Contact).where(Contact.organization_id.in_(org_ids)).order_by(Contact.is_primary.desc(), Contact.last_name)
-        )).scalars().all():
-            contacts_by_org[c.organization_id].append(c)
+        for batch in _batched_ids(org_ids):
+            for c in (await db.execute(
+                select(Contact).where(Contact.organization_id.in_(batch)).order_by(Contact.is_primary.desc(), Contact.last_name)
+            )).scalars().all():
+                contacts_by_org[c.organization_id].append(c)
 
     result: dict[str, dict] = {}
     for opp in opportunities:
@@ -177,6 +190,8 @@ def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: 
 async def list_opportunities(
     stage: str | None = Query(None),
     assigned_to: str | None = Query(None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     q = select(Opportunity)
@@ -190,12 +205,17 @@ async def list_opportunities(
         q = q.where(Opportunity.assigned_to == assigned_to)
     q = q.order_by(Opportunity.lead_priority_score.desc().nulls_last(), Opportunity.buyer_preference_score.desc().nulls_last(), Opportunity.updated_at.desc())
 
+    count_q = select(func.count()).select_from(q.subquery())
+    total_result = await db.execute(count_q)
+    total = total_result.scalar() or 0
+
+    q = q.limit(limit).offset(offset)
     result = await db.execute(q)
     opportunities = result.scalars().all()
     context = await _batch_load_opportunity_context(opportunities, db)
 
     items = [_opportunity_to_read(opp, **context[opp.id]) for opp in opportunities]
-    return OpportunityList(items=items, total=len(items))
+    return OpportunityList(items=items, total=total)
 
 
 @router.post("/{opportunity_id}/transition", response_model=OpportunityRead)

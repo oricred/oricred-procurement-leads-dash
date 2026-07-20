@@ -71,10 +71,10 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     past_due_count = (await db.execute(select(func.count()).select_from(PastDueQueue))).scalar() or 0
 
     # --- Value stats ---
-    sum_result = await db.execute(select(func.sum(Award.amount)))
-    total_award_value = float(sum_result.scalar()) if sum_result.scalar() else None
-    avg_result = await db.execute(select(func.avg(Award.amount)))
-    avg_award_value = float(avg_result.scalar()) if avg_result.scalar() else None
+    sum_val = (await db.execute(select(func.sum(Award.amount)))).scalar()
+    total_award_value = float(sum_val) if sum_val is not None else None
+    avg_val = (await db.execute(select(func.avg(Award.amount)))).scalar()
+    avg_award_value = float(avg_val) if avg_val is not None else None
 
     # --- Leads from awards ---
     leads_from_awards = (
@@ -120,7 +120,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     all_tenders_count = total_tenders
     awarded_count = (
         await db.execute(
-            select(func.count()).select_from(Award).distinct(Award.tender_id)
+            select(func.count(func.distinct(Award.tender_id)))
         )
     ).scalar() or 0
     watching_count = (
