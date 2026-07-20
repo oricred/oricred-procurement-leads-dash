@@ -7,11 +7,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.opportunities import _load_opportunity_contacts, _opportunity_to_read
+from app.api.opportunities import _batch_load_opportunity_context, _opportunity_to_read
 from app.database import get_db
 from app.models.award import Award
-from app.models.category import Category
-from app.models.company import Company
 from app.models.opportunity import Opportunity
 from app.models.tender import Tender
 from app.schemas.opportunity import OpportunityList
@@ -88,22 +86,10 @@ async def list_leads(
     )
 
     result = await db.execute(q)
-    items = []
-    for opp in result.scalars().all():
-        tender = await db.get(Tender, opp.tender_id) if opp.tender_id else None
-        award = await db.get(Award, opp.award_id) if opp.award_id else None
-        company = await db.get(Company, opp.company_id) if opp.company_id else None
+    opportunities = result.scalars().all()
+    context = await _batch_load_opportunity_context(opportunities, db)
 
-        category_name = None
-        if tender and tender.category_id:
-            cat = await db.get(Category, tender.category_id)
-            if cat:
-                category_name = cat.name
-
-        contacts = await _load_opportunity_contacts(opp, db)
-        items.append(
-            _opportunity_to_read(opp, tender, award, company, contacts, None, category_name)
-        )
+    items = [_opportunity_to_read(opp, **context[opp.id]) for opp in opportunities]
     return OpportunityList(items=items, total=len(items))
 
 

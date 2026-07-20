@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
-import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDroppable, pointerWithin, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
+import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDroppable, pointerWithin, closestCorners, type DragStartEvent, type DragEndEvent, type CollisionDetection } from '@dnd-kit/core';
 import { opportunities } from '../services/api';
 import { STAGE_ORDER, WORKFLOW_NEXT, type Opportunity, type Stage } from '../types';
 import OpportunityCard from '../components/OpportunityCard';
@@ -29,6 +29,7 @@ function PhaseDroppable({ phase, stages, items, onCardClick, onDecline }: {
   return (
     <section
       ref={setNodeRef}
+      data-phase={phase}
       className={`rounded-xl border min-h-72 flex flex-col transition-colors ${
         isOver ? 'border-primary-500 bg-primary-500/5' : 'border-surface-300 bg-surface-200/50'
       }`}
@@ -93,6 +94,12 @@ function DecliningDialog({ opp, onConfirm, onCancel, pending }: {
   );
 }
 
+const collisionDetection: CollisionDetection = useCallback((args) => {
+  const pointerCollisions = pointerWithin(args);
+  if (pointerCollisions.length > 0) return pointerCollisions;
+  return closestCorners(args);
+}, []);
+
 export default function PipelinePage() {
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
@@ -119,9 +126,16 @@ export default function PipelinePage() {
   };
 
   const dndTransition = useMutation({
-    mutationFn: ({ id, body }: { id: string; body: Parameters<typeof opportunities.transition>[1] }) =>
-      opportunities.transition(id, body),
-    onMutate: async ({ id, body }) => {
+    mutationFn: ({ id, action, version, lost_reason }: { id: string; action: 'advance' | 'back' | 'decline' | 'markContacted'; version: number; lost_reason?: string }) => {
+      if (action === 'markContacted') {
+        return opportunities.markContacted(id, { version });
+      }
+      if (action === 'decline') {
+        return opportunities.transition(id, { action, version, lost_reason });
+      }
+      return opportunities.transition(id, { action, version, confirm: action === 'back' });
+    },
+    onMutate: async ({ id, action }) => {
       await queryClient.cancelQueries({ queryKey: ['opportunities'] });
       const previous = queryClient.getQueryData(['opportunities']);
 
@@ -132,12 +146,12 @@ export default function PipelinePage() {
           items: old.items.map((o) => {
             if (o.id !== id) return o;
             let newStage: Stage | null = null;
-            if (body.action === 'advance') {
+            if (action === 'advance' || action === 'markContacted') {
               newStage = WORKFLOW_NEXT[o.kanban_stage] ?? null;
-            } else if (body.action === 'back') {
+            } else if (action === 'back') {
               const prev = Object.entries(WORKFLOW_NEXT).find(([, v]) => v === o.kanban_stage);
               if (prev) newStage = prev[0] as Stage;
-            } else if (body.action === 'decline' || body.action === 'lose') {
+            } else if (action === 'decline') {
               newStage = 'lost_lead';
             }
             return newStage ? { ...o, kanban_stage: newStage } : o;
@@ -180,9 +194,19 @@ export default function PipelinePage() {
   const handleDragEnd = (event: DragEndEvent) => {
     setActiveDrag(null);
     const opp = (event.active.data.current as { opportunity?: Opportunity } | undefined)?.opportunity;
-    if (!opp || !event.over) return;
+    if (!opp) return;
 
-    const targetPhase = String(event.over.id);
+    let targetPhase: string;
+    if (event.over) {
+      targetPhase = String(event.over.id);
+    } else {
+      const x = (event.activatorEvent as MouseEvent).clientX;
+      const y = (event.activatorEvent as MouseEvent).clientY;
+      targetPhase = document.elementsFromPoint(x, y)
+        .find((el) => el.getAttribute('data-phase'))
+        ?.getAttribute('data-phase') ?? '';
+    }
+
     const targetStages = phases[targetPhase];
     if (!targetStages) return;
 
@@ -193,9 +217,13 @@ export default function PipelinePage() {
     const targetIdx = STAGE_ORDER.indexOf(targetStage);
 
     if (targetIdx === currentIdx + 1) {
-      dndTransition.mutate({ id: opp.id, body: { action: 'advance', version: opp.version } });
+      if (opp.kanban_stage === 'new_lead') {
+        dndTransition.mutate({ id: opp.id, action: 'markContacted', version: opp.version });
+      } else {
+        dndTransition.mutate({ id: opp.id, action: 'advance', version: opp.version });
+      }
     } else if (targetIdx === currentIdx - 1) {
-      dndTransition.mutate({ id: opp.id, body: { action: 'back', version: opp.version, confirm: true } });
+      dndTransition.mutate({ id: opp.id, action: 'back', version: opp.version });
     }
   };
 
@@ -203,7 +231,7 @@ export default function PipelinePage() {
     if (!declining) return;
     const opp = declining;
     setDeclining(null);
-    dndTransition.mutate({ id: opp.id, body: { action: 'decline', version: opp.version, lost_reason: reason } });
+    dndTransition.mutate({ id: opp.id, action: 'decline', version: opp.version, lost_reason: reason });
   };
 
   return (
@@ -221,7 +249,7 @@ export default function PipelinePage() {
           {dndError && (
             <div className="mb-3 rounded bg-red-500/10 px-3 py-2 text-sm text-red-300">{dndError}</div>
           )}
-          <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+          <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 xl:grid-cols-5">
             {Object.entries(phases).map(([phase, stages]) => (
               <PhaseDroppable

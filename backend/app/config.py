@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     tsa_api_key: str = ""
     tsa_base_url: str = "https://api.tenders-sa.org"
+    tsa_database_url: str = "postgresql+asyncpg://tendersa_app:11111111@10.0.1.175:5432/tendersa_prod"
 
     database_url: str = f"sqlite+aiosqlite:///{Path(__file__).resolve().parent.parent / 'oricred.db'}"
     redis_url: str = ""

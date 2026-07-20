@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import async_session
 from app.models.opportunity import Opportunity
 from app.models.tender import Tender
@@ -21,6 +22,8 @@ logger = structlog.get_logger()
 async def _get_adapter(db: AsyncSession) -> CRMAdapter | None:
     creds = await get_config("admin_credentials", db)
     api_key = creds.get("monday_api_key", "")
+    if not api_key:
+        api_key = settings.monday_api_key
     if not api_key:
         logger.warning("monday_api_key_not_configured")
         return None

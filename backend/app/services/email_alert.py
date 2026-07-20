@@ -1,4 +1,9 @@
+import asyncio
+import smtplib
+from email.mime.text import MIMEText
+
 import structlog
+from app.config import settings
 
 logger = structlog.get_logger()
 
@@ -42,6 +47,11 @@ class EmailAlertService:
         ),
     }
 
+    def __init__(self) -> None:
+        self._enabled = bool(settings.smtp_host and settings.smtp_user and settings.smtp_password)
+        if not self._enabled:
+            logger.warning("smtp_not_configured", host=settings.smtp_host, user=settings.smtp_user)
+
     async def send(self, event_type: str, recipient: str, **kwargs) -> bool:
         template = self.TEMPLATES.get(event_type)
         if not template:
@@ -58,5 +68,33 @@ class EmailAlertService:
         subject = f"{subject_map.get(event_type, 'Oricred Notification')}: {kwargs.get('company_name', kwargs.get('tender_title', ''))}"
         body = template.format(**kwargs)
 
-        logger.info("email_sent", event_type=event_type, recipient=recipient, subject=subject)
-        return True
+        if not self._enabled:
+            logger.info("email_logged", event_type=event_type, recipient=recipient, subject=subject)
+            return True
+
+        try:
+            msg = MIMEText(body)
+            msg["Subject"] = subject
+            msg["From"] = f"{settings.email_from_name} <{settings.email_from}>"
+            msg["To"] = recipient
+
+            await asyncio.to_thread(
+                self._smtp_send,
+                msg,
+                settings.smtp_host,
+                settings.smtp_port,
+                settings.smtp_user,
+                settings.smtp_password,
+            )
+            logger.info("email_sent", event_type=event_type, recipient=recipient, subject=subject)
+            return True
+        except Exception:
+            logger.exception("email_send_failed", event_type=event_type, recipient=recipient)
+            return False
+
+    @staticmethod
+    def _smtp_send(msg: MIMEText, host: str, port: int, user: str, password: str) -> None:
+        with smtplib.SMTP(host, port, timeout=15) as server:
+            server.starttls()
+            server.login(user, password)
+            server.send_message(msg)

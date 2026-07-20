@@ -42,7 +42,7 @@ export interface Contact {
   first_name: string;
   last_name: string;
   job_title: string | null;
-  email: string;
+  email: string | null;
   phone_direct: string | null;
   phone_mobile: string | null;
   linkedin_url: string | null;

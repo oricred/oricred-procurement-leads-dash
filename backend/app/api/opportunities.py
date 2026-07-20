@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -16,7 +17,7 @@ from app.models.organization import Organization
 from app.models.contact import Contact
 from app.models.user import User
 from app.models.category import Category
-from app.schemas.opportunity import OpportunityRead, OpportunityStageUpdate, OpportunityUpdate, OpportunityList, AuditEntry, OpportunityContactedUpdate, OpportunityTransition
+from app.schemas.opportunity import OpportunityRead, OpportunityUpdate, OpportunityList, AuditEntry, OpportunityContactedUpdate, OpportunityTransition
 from app.schemas.contact import ContactRead
 from app.schemas.buyer_relationship import BuyerRelationshipRead
 from app.services.buyer_relationship import compute_relationship, get_relationship
@@ -51,6 +52,79 @@ async def _load_opportunity_contacts(opp: Opportunity, db: AsyncSession) -> list
                 if c.id not in seen:
                     contacts.append(c)
     return [ContactRead.model_validate(c) for c in contacts]
+
+
+async def _batch_load_opportunity_context(opportunities: list[Opportunity], db: AsyncSession) -> dict[str, dict]:
+    """Batch-load all related entities for a list of opportunities — fixes N+1."""
+    tender_ids = {o.tender_id for o in opportunities if o.tender_id}
+    award_ids = {o.award_id for o in opportunities if o.award_id}
+    company_ids = {o.company_id for o in opportunities if o.company_id}
+
+    tenders: dict[str, Tender] = {}
+    if tender_ids:
+        for t in (await db.execute(select(Tender).where(Tender.id.in_(tender_ids)))).scalars().all():
+            tenders[t.id] = t
+
+    awards: dict[str, Award] = {}
+    if award_ids:
+        for a in (await db.execute(select(Award).where(Award.id.in_(award_ids)))).scalars().all():
+            awards[a.id] = a
+
+    companies: dict[str, Company] = {}
+    if company_ids:
+        for c in (await db.execute(select(Company).where(Company.id.in_(company_ids)))).scalars().all():
+            companies[c.id] = c
+
+    org_ids = {t.buyer_org_id for t in tenders.values() if t.buyer_org_id}
+    orgs: dict[str, Organization] = {}
+    if org_ids:
+        for o in (await db.execute(select(Organization).where(Organization.id.in_(org_ids)))).scalars().all():
+            orgs[o.id] = o
+
+    category_ids = {t.category_id for t in tenders.values() if t.category_id}
+    categories: dict[str, Category] = {}
+    if category_ids:
+        for cat in (await db.execute(select(Category).where(Category.id.in_(category_ids)))).scalars().all():
+            categories[cat.id] = cat
+
+    contacts_by_company: dict[str, list[Contact]] = defaultdict(list)
+    if company_ids:
+        for c in (await db.execute(
+            select(Contact).where(Contact.company_id.in_(company_ids)).order_by(Contact.is_primary.desc(), Contact.last_name)
+        )).scalars().all():
+            contacts_by_company[c.company_id].append(c)
+
+    contacts_by_org: dict[str, list[Contact]] = defaultdict(list)
+    if org_ids:
+        for c in (await db.execute(
+            select(Contact).where(Contact.organization_id.in_(org_ids)).order_by(Contact.is_primary.desc(), Contact.last_name)
+        )).scalars().all():
+            contacts_by_org[c.organization_id].append(c)
+
+    result: dict[str, dict] = {}
+    for opp in opportunities:
+        tender = tenders.get(opp.tender_id) if opp.tender_id else None
+        award = awards.get(opp.award_id) if opp.award_id else None
+        company = companies.get(opp.company_id) if opp.company_id else None
+        buyer_org_name = orgs[tender.buyer_org_id].name if tender and tender.buyer_org_id and tender.buyer_org_id in orgs else None
+        category_name = categories[tender.category_id].name if tender and tender.category_id and tender.category_id in categories else None
+
+        merged: list[Contact] = list(contacts_by_company.get(opp.company_id, []) if opp.company_id else [])
+        if tender and tender.buyer_org_id:
+            seen = {c.id for c in merged}
+            for c in contacts_by_org.get(tender.buyer_org_id, []):
+                if c.id not in seen:
+                    merged.append(c)
+
+        result[opp.id] = {
+            'tender': tender,
+            'award': award,
+            'company': company,
+            'buyer_org_name': buyer_org_name,
+            'category_name': category_name,
+            'contacts': [ContactRead.model_validate(c) for c in merged],
+        }
+    return result
 
 
 def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: Award | None = None, company: Company | None = None, contacts: list[ContactRead] | None = None, buyer_org_name: str | None = None, category_name: str | None = None) -> OpportunityRead:
@@ -118,39 +192,9 @@ async def list_opportunities(
 
     result = await db.execute(q)
     opportunities = result.scalars().all()
+    context = await _batch_load_opportunity_context(opportunities, db)
 
-    items = []
-    for opp in opportunities:
-        tender = None
-        award = None
-        company = None
-
-        if opp.tender_id:
-            t_result = await db.execute(select(Tender).where(Tender.id == opp.tender_id))
-            tender = t_result.scalar_one_or_none()
-        if opp.award_id:
-            a_result = await db.execute(select(Award).where(Award.id == opp.award_id))
-            award = a_result.scalar_one_or_none()
-        if opp.company_id:
-            c_result = await db.execute(select(Company).where(Company.id == opp.company_id))
-            company = c_result.scalar_one_or_none()
-
-        buyer_org_name = None
-        if tender and tender.buyer_org_id:
-            o_result = await db.execute(select(Organization).where(Organization.id == tender.buyer_org_id))
-            org = o_result.scalar_one_or_none()
-            if org:
-                buyer_org_name = org.name
-
-        category_name = None
-        if tender and tender.category_id:
-            cat = await db.get(Category, tender.category_id)
-            if cat:
-                category_name = cat.name
-
-        contacts = await _load_opportunity_contacts(opp, db)
-        items.append(_opportunity_to_read(opp, tender, award, company, contacts, buyer_org_name, category_name))
-
+    items = [_opportunity_to_read(opp, **context[opp.id]) for opp in opportunities]
     return OpportunityList(items=items, total=len(items))
 
 
@@ -248,52 +292,6 @@ async def get_opportunity(opportunity_id: str, db: AsyncSession = Depends(get_db
 
     contacts = await _load_opportunity_contacts(opp, db)
     return _opportunity_to_read(opp, tender, award, company, contacts, buyer_org_name)
-
-
-@router.patch("/{opportunity_id}/stage", response_model=OpportunityRead)
-async def update_stage(
-    opportunity_id: str,
-    body: OpportunityStageUpdate,
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(
-        select(Opportunity).where(Opportunity.id == opportunity_id)
-    )
-    opp = result.scalar_one_or_none()
-    if not opp:
-        raise HTTPException(status_code=404, detail="Opportunity not found")
-
-    if opp.version != body.version:
-        raise HTTPException(status_code=409, detail="Version conflict: opportunity was modified")
-
-    raise HTTPException(status_code=400, detail="Use the approved transition endpoint for workflow changes")
-
-    new_stage = normalize_stage(body.stage)
-    if not is_workflow_stage(new_stage):
-        raise HTTPException(status_code=400, detail="Invalid opportunity stage")
-
-    old_stage = normalize_stage(opp.kanban_stage)
-    opp.kanban_stage = new_stage
-    opp.version += 1
-    opp.updated_at = datetime.now(timezone.utc)
-    if body.assigned_to:
-        opp.assigned_to = body.assigned_to
-    if new_stage in ("funded", "lost_lead"):
-        opp.closed_at = datetime.now(timezone.utc)
-
-    audit = OpportunityAudit(
-        opportunity_id=opp.id,
-        from_stage=old_stage,
-        to_stage=new_stage,
-        changed_by=body.assigned_to or "system",
-    )
-    db.add(audit)
-    await db.commit()
-    await db.refresh(opp)
-
-    await push_opportunity_to_crm(opportunity_id)
-
-    return await _read_opportunity_with_context(opp, db)
 
 
 async def _read_opportunity_with_context(opp: Opportunity, db: AsyncSession) -> OpportunityRead:
@@ -515,11 +513,12 @@ async def get_crm_activity(opportunity_id: str, db: AsyncSession = Depends(get_d
     if not opp:
         raise HTTPException(status_code=404, detail="Opportunity not found")
 
+    from app.config import settings
     from app.services.admin_config import get_config
     from app.services.crm.monday import MondayDotComAdapter
 
     creds = await get_config("admin_credentials", db)
-    api_key = creds.get("monday_api_key", "")
+    api_key = creds.get("monday_api_key", "") or settings.monday_api_key
     board_id = creds.get("monday_board_id", "oricred_opportunities")
     if not api_key:
         return {"activities": []}
@@ -532,23 +531,19 @@ async def get_crm_activity(opportunity_id: str, db: AsyncSession = Depends(get_d
     finally:
         await adapter.close()
 
-    company_name = None
-    if opp.company_id:
-        c_result = await db.execute(select(Company).where(Company.id == opp.company_id))
-        company = c_result.scalar_one_or_none()
-        if company:
-            company_name = company.name
+    if not opp.company_id:
+        return {"activities": []}
+
+    c_result = await db.execute(select(Company).where(Company.id == opp.company_id))
+    company = c_result.scalar_one_or_none()
+    company_name = company.name if company else None
+    if not company_name:
+        return {"activities": []}
 
     filtered = []
     for act in activities:
         item_name = (act.data or {}).get("item_name", "")
-        if company_name and company_name.lower() in item_name.lower():
-            filtered.append({
-                "event": act.event,
-                "data": act.data,
-                "created_at": act.created_at.isoformat(),
-            })
-        elif not company_name:
+        if company_name.lower() in item_name.lower():
             filtered.append({
                 "event": act.event,
                 "data": act.data,

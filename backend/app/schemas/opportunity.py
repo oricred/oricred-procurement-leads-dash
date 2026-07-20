@@ -48,10 +48,6 @@ class OpportunityRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class OpportunityCreate(BaseModel):
-    pass
-
-
 class OpportunityUpdate(BaseModel):
     notes: str | None = None
     risk_flag: str | None = None
@@ -66,12 +62,6 @@ class AuditEntry(BaseModel):
     changed_at: datetime
 
     model_config = {"from_attributes": True}
-
-
-class OpportunityStageUpdate(BaseModel):
-    stage: str
-    assigned_to: str | None = None
-    version: int
 
 
 class OpportunityTransition(BaseModel):

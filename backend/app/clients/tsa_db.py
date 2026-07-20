@@ -9,7 +9,8 @@ logger = structlog.get_logger()
 
 # ⚠️ READ-ONLY CONNECTION — This app must NEVER write to the Tenders-SA database.
 # PostgreSQL session is forced to read-only via pool event listener.
-TSA_DATABASE_URL = "postgresql+asyncpg://tendersa_app:11111111@10.0.1.175:5432/tendersa_prod"
+from app.config import settings
+TSA_DATABASE_URL = settings.tsa_database_url
 
 # Tenders table field map — our names → TSA DB column names
 TENDER_FIELD_MAP: dict[str, str] = {

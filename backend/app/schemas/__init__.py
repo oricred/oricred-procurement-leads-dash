@@ -1,8 +1,6 @@
 from app.schemas.opportunity import (
     OpportunityRead,
-    OpportunityCreate,
     OpportunityUpdate,
-    OpportunityStageUpdate,
     OpportunityContactedUpdate,
     OpportunityList,
 )
@@ -15,9 +13,7 @@ from app.schemas.historical_contact import HistoricalContactRead, HistoricalCont
 
 __all__ = [
     "OpportunityRead",
-    "OpportunityCreate",
     "OpportunityUpdate",
-    "OpportunityStageUpdate",
     "OpportunityContactedUpdate",
     "OpportunityList",
     "RadarAward",

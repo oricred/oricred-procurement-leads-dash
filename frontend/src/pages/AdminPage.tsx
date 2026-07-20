@@ -449,18 +449,18 @@ function FilterConfigTab() {
   );
 }
 
-// ── Scrapers Tab ──
+// ── Sources Tab ──
 
 function SourcesTab() {
   const queryClient = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ['admin-sources'], queryFn: () => admin.getScrapers().then(r => r.data) });
+  const { data, isLoading } = useQuery({ queryKey: ['admin-sources'], queryFn: () => admin.getSources().then(r => r.data) });
   const [form, setForm] = useState<Record<string, unknown>>({});
   const [saved, setSaved] = useState(false);
 
   useEffect(() => { if (data) setForm(data); }, [data]);
 
   const mutation = useMutation({
-    mutationFn: (body: Record<string, unknown>) => admin.updateScrapers(body),
+    mutationFn: (body: Record<string, unknown>) => admin.updateSources(body),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['admin-sources'] }); setSaved(true); setTimeout(() => setSaved(false), 2000); },
   });
 
