@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, Building2, Award, Users, FileText, TrendingUp, BarChart3, Activity, History, Edit2, Phone, Mail, Linkedin, Star, Plus, Trash2, CheckCircle2 } from 'lucide-react';
+import { X, Building2, Award, Users, FileText, TrendingUp, BarChart3, Activity, History, Edit2, Phone, Mail, Linkedin, Star, Plus, Trash2, CheckCircle2, Pencil } from 'lucide-react';
 import { auth, opportunities, buyerRelationships, crmActivity, contacts as contactsApi } from '../services/api';
 import type { Opportunity, Contact } from '../types';
 import WorkflowActions from './WorkflowActions';
@@ -51,6 +51,13 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
     none: 'text-red-400',
   };
 
+  const [editingContactId, setEditingContactId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{
+    first_name: string; last_name: string; job_title: string;
+    email: string; phone_direct: string; phone_mobile: string;
+    linkedin_url: string; is_primary: boolean; notes: string;
+  } | null>(null);
+
   const queryClient = useQueryClient();
   const { data: assignees = [] } = useQuery({
     queryKey: ['assignees'],
@@ -84,6 +91,16 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
     },
   });
 
+  const editContactMutation = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: Parameters<typeof contactsApi.update>[1] }) =>
+      contactsApi.update(id, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['opportunity', opp.id] });
+      setEditingContactId(null);
+      setEditForm(null);
+    },
+  });
+
   function handleAddContact() {
     addContactMutation.mutate(newContact);
   }
@@ -92,6 +109,31 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
     if (confirm('Remove this contact?')) {
       deleteContactMutation.mutate(contactId);
     }
+  }
+
+  function handleStartEdit(c: Contact) {
+    setEditingContactId(c.id);
+    setEditForm({
+      first_name: c.first_name,
+      last_name: c.last_name,
+      job_title: c.job_title ?? '',
+      email: c.email ?? '',
+      phone_direct: c.phone_direct ?? '',
+      phone_mobile: c.phone_mobile ?? '',
+      linkedin_url: c.linkedin_url ?? '',
+      is_primary: c.is_primary,
+      notes: c.notes ?? '',
+    });
+  }
+
+  function handleSaveEdit() {
+    if (!editingContactId || !editForm) return;
+    editContactMutation.mutate({ id: editingContactId, body: editForm });
+  }
+
+  function handleCancelEdit() {
+    setEditingContactId(null);
+    setEditForm(null);
   }
 
   const { data: auditData } = useQuery({
@@ -528,50 +570,89 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
             <p className="text-sm text-gray-500 italic">No contacts</p>
           ) : (
             <div className="space-y-2 max-h-60 overflow-y-auto">
-              {opp.contacts.map((c) => (
-                <div key={c.id} className="border-b border-surface-300 pb-2 last:border-0">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-sm font-medium text-gray-200">
-                          {c.first_name} {c.last_name}
-                        </span>
-                        {c.is_primary && <Star className="w-3 h-3 text-emerald-400 fill-emerald-400" />}
-                        {c.job_title && <span className="text-xs text-gray-500">— {c.job_title}</span>}
+              {opp.contacts.map((c) =>
+                editingContactId === c.id && editForm ? (
+                  <div key={c.id} className="border-b border-surface-300 pb-2 last:border-0">
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <input className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500" value={editForm.first_name} onChange={e => setEditForm(f => f ? { ...f, first_name: e.target.value } : f)} />
+                        <input className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500" value={editForm.last_name} onChange={e => setEditForm(f => f ? { ...f, last_name: e.target.value } : f)} />
                       </div>
-                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5 text-xs text-gray-400">
-                        {c.email && (
-                          <a href={`mailto:${c.email}`} className="flex items-center gap-1 hover:text-primary-400 transition-colors">
-                            <Mail className="w-3 h-3" /> {c.email}
-                          </a>
-                        )}
-                        {c.phone_direct && (
-                          <a href={`tel:${c.phone_direct}`} className="flex items-center gap-1 hover:text-primary-400 transition-colors">
-                            <Phone className="w-3 h-3" /> {c.phone_direct}
-                          </a>
-                        )}
-                        {c.phone_mobile && (
-                          <a href={`tel:${c.phone_mobile}`} className="flex items-center gap-1 hover:text-primary-400 transition-colors">
-                            <Phone className="w-3 h-3" /> {c.phone_mobile}
-                          </a>
-                        )}
-                        {c.linkedin_url && (
-                          <a href={c.linkedin_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 hover:text-primary-400 transition-colors">
-                            <Linkedin className="w-3 h-3" /> LinkedIn
-                          </a>
-                        )}
+                      <input className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500" placeholder="Job title" value={editForm.job_title} onChange={e => setEditForm(f => f ? { ...f, job_title: e.target.value } : f)} />
+                      <input className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500" placeholder="Email" type="email" value={editForm.email} onChange={e => setEditForm(f => f ? { ...f, email: e.target.value } : f)} />
+                      <div className="grid grid-cols-2 gap-2">
+                        <input className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500" placeholder="Phone (direct)" value={editForm.phone_direct} onChange={e => setEditForm(f => f ? { ...f, phone_direct: e.target.value } : f)} />
+                        <input className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500" placeholder="Phone (mobile)" value={editForm.phone_mobile} onChange={e => setEditForm(f => f ? { ...f, phone_mobile: e.target.value } : f)} />
                       </div>
-                      {c.notes && <p className="text-xs text-gray-600 mt-0.5">{c.notes}</p>}
+                      <input className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500" placeholder="LinkedIn URL" value={editForm.linkedin_url} onChange={e => setEditForm(f => f ? { ...f, linkedin_url: e.target.value } : f)} />
+                      <label className="flex items-center gap-2 text-xs text-gray-400">
+                        <input type="checkbox" checked={editForm.is_primary} onChange={e => setEditForm(f => f ? { ...f, is_primary: e.target.checked } : f)} />
+                        Primary contact
+                      </label>
+                      <textarea className="w-full bg-surface-200 border border-surface-400 rounded px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500" placeholder="Notes" rows={2} value={editForm.notes} onChange={e => setEditForm(f => f ? { ...f, notes: e.target.value } : f)} />
+                      <div className="flex gap-2">
+                        <button onClick={handleSaveEdit} disabled={!editForm.first_name || !editForm.last_name} className="px-3 py-1 text-xs bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition-colors disabled:opacity-50">
+                          Save
+                        </button>
+                        <button onClick={handleCancelEdit} className="px-3 py-1 text-xs bg-surface-300 hover:bg-surface-200 text-gray-300 rounded-lg transition-colors">
+                          Cancel
+                        </button>
+                      </div>
                     </div>
-                    <button
-                      onClick={() => handleDeleteContact(c.id)}
-                      className="p-1 hover:bg-surface-300 rounded transition-colors text-gray-600 hover:text-red-400 shrink-0 ml-2"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
                   </div>
-                </div>
-              ))}
+                ) : (
+                  <div key={c.id} className="border-b border-surface-300 pb-2 last:border-0">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm font-medium text-gray-200">
+                            {c.first_name} {c.last_name}
+                          </span>
+                          {c.is_primary && <Star className="w-3 h-3 text-emerald-400 fill-emerald-400" />}
+                          {c.job_title && <span className="text-xs text-gray-500">— {c.job_title}</span>}
+                        </div>
+                        <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5 text-xs text-gray-400">
+                          {c.email && (
+                            <a href={`mailto:${c.email}`} className="flex items-center gap-1 hover:text-primary-400 transition-colors">
+                              <Mail className="w-3 h-3" /> {c.email}
+                            </a>
+                          )}
+                          {c.phone_direct && (
+                            <a href={`tel:${c.phone_direct}`} className="flex items-center gap-1 hover:text-primary-400 transition-colors">
+                              <Phone className="w-3 h-3" /> {c.phone_direct}
+                            </a>
+                          )}
+                          {c.phone_mobile && (
+                            <a href={`tel:${c.phone_mobile}`} className="flex items-center gap-1 hover:text-primary-400 transition-colors">
+                              <Phone className="w-3 h-3" /> {c.phone_mobile}
+                            </a>
+                          )}
+                          {c.linkedin_url && (
+                            <a href={c.linkedin_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 hover:text-primary-400 transition-colors">
+                              <Linkedin className="w-3 h-3" /> LinkedIn
+                            </a>
+                          )}
+                        </div>
+                        {c.notes && <p className="text-xs text-gray-600 mt-0.5">{c.notes}</p>}
+                      </div>
+                      <div className="flex items-center shrink-0 ml-2">
+                        <button
+                          onClick={() => handleStartEdit(c)}
+                          className="p-1 hover:bg-surface-300 rounded transition-colors text-gray-600 hover:text-gray-200"
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteContact(c.id)}
+                          className="p-1 hover:bg-surface-300 rounded transition-colors text-gray-600 hover:text-red-400"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              )}
             </div>
           )}
         </div>
