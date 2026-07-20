@@ -92,48 +92,14 @@ async def _ensure_award_columns() -> None:
 
 
 async def _ensure_contact_email_nullable() -> None:
-    """Allow externally enriched contacts to be recorded when only a phone is known."""
+    """
+    Allow externally enriched contacts to be recorded when only a phone is known.
+    On PostgreSQL this is a safe ALTER TABLE. SQLite dev databases are created
+    from scratch by create_all() with the correct nullable schema, so skip.
+    """
     async with engine.begin() as conn:
         if conn.dialect.name == "sqlite":
-            columns = (await conn.execute(text("PRAGMA table_info(contacts)"))).fetchall()
-            email_column = next((column for column in columns if column[1] == "email"), None)
-            if not email_column or not email_column[3]:
-                return
-            await conn.execute(text("ALTER TABLE contacts RENAME TO contacts_legacy"))
-            await conn.execute(
-                text(
-                    "CREATE TABLE contacts ("
-                    "id VARCHAR(36) NOT NULL PRIMARY KEY, "
-                    "company_id VARCHAR(36), organization_id VARCHAR(32), "
-                    "first_name VARCHAR(128) NOT NULL, last_name VARCHAR(128) NOT NULL, "
-                    "job_title VARCHAR(256), email VARCHAR(256), phone_direct VARCHAR(32), "
-                    "phone_mobile VARCHAR(32), linkedin_url VARCHAR(512), "
-                    "is_primary BOOLEAN NOT NULL, notes TEXT, source VARCHAR(32) NOT NULL, "
-                    "created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, "
-                    "CONSTRAINT uq_contact_company_email UNIQUE (company_id, email), "
-                    "CONSTRAINT uq_contact_org_email UNIQUE (organization_id, email))"
-                )
-            )
-            await conn.execute(
-                text(
-                    "INSERT INTO contacts SELECT id, company_id, organization_id, first_name, "
-                    "last_name, job_title, NULLIF(email, ''), phone_direct, phone_mobile, "
-                    "linkedin_url, is_primary, notes, source, created_at, updated_at "
-                    "FROM contacts_legacy"
-                )
-            )
-            await conn.execute(text("DROP TABLE contacts_legacy"))
-            await conn.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_contacts_company_id ON contacts (company_id)")
-            )
-            await conn.execute(
-                text(
-                    "CREATE INDEX IF NOT EXISTS ix_contacts_organization_id "
-                    "ON contacts (organization_id)"
-                )
-            )
             return
-
         await conn.execute(text("UPDATE contacts SET email = NULL WHERE email = ''"))
         await conn.execute(text("ALTER TABLE contacts ALTER COLUMN email DROP NOT NULL"))
 
