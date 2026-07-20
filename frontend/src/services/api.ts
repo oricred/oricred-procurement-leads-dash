@@ -61,18 +61,22 @@ export const leads = {
   previewContactImport: (file: File) => {
     const data = new FormData();
     data.append('file', file);
-    return api.post<LeadContactImportResult>('/leads/contact-import/preview', data);
+    return api.post<LeadContactImportResult>('/leads/contact-import/preview', data, {
+      headers: { 'Content-Type': undefined },
+    });
   },
   applyContactImport: (file: File) => {
     const data = new FormData();
     data.append('file', file);
-    return api.post<LeadContactImportResult>('/leads/contact-import/apply', data);
+    return api.post<LeadContactImportResult>('/leads/contact-import/apply', data, {
+      headers: { 'Content-Type': undefined },
+    });
   },
 };
 
 export interface LeadContactImportResult {
   total_rows: number; creates: number; updates: number; skips: number; applied?: number;
-  rows: Array<{ row: number; lead_id: string | null; action: 'create' | 'update' | 'skip'; message: string }>;
+  rows: Array<{ row: number; lead_id: string | null; company: string | null; action: 'create' | 'update' | 'skip'; message: string }>;
 }
 
 export const radar = {

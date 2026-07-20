@@ -8,6 +8,7 @@ from openpyxl import load_workbook
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.company import Company
 from app.models.contact import Contact
 from app.models.opportunity import Opportunity
 from app.services.lead_scoring import refresh_lead_scoring
@@ -20,6 +21,31 @@ IMPORT_METADATA_FIELDS = (
     ("enrichment_date", "Enrichment date"),
     ("research_notes", "Research notes"),
 )
+
+COLUMN_ALIASES = {
+    "email": "contact_email",
+    "e-mail": "contact_email",
+    "mail": "contact_email",
+    "phone": "contact_phone",
+    "telephone": "contact_phone",
+    "tel": "contact_phone",
+    "cell": "contact_phone",
+    "cellphone": "contact_phone",
+    "mobile": "contact_phone",
+    "phone_direct": "contact_phone",
+    "phone_mobile": "contact_phone",
+    "name": "contact_name",
+    "contact_person": "contact_name",
+    "full_name": "contact_name",
+    "person": "contact_name",
+    "job_title": "contact_job_title",
+    "title": "contact_job_title",
+    "position": "contact_job_title",
+    "designation": "contact_job_title",
+    "company_name": "company",
+    "supplier": "company",
+    "supplier_name": "company",
+}
 
 
 @dataclass
@@ -35,6 +61,7 @@ class ImportDecision:
     message: str
     opportunity: Opportunity | None = None
     contact: Contact | None = None
+    company_id: str | None = None
 
 
 def _clean(value: object | None) -> str:
@@ -54,23 +81,47 @@ def _split_name(name: str) -> tuple[str, str]:
     return (parts[0], parts[1] if len(parts) > 1 else "")
 
 
+def _canonicalise_row(row: ImportRow) -> ImportRow:
+    mapped = row.values.copy()
+    for alias, canonical in COLUMN_ALIASES.items():
+        if alias in mapped and canonical not in mapped:
+            mapped[canonical] = mapped[alias]
+    return ImportRow(row_number=row.row_number, values=mapped)
+
+
+async def _find_company_and_opportunity(
+    company_name: str, db: AsyncSession
+) -> tuple[Company | None, Opportunity | None]:
+    result = await db.execute(
+        select(Company).where(Company.name.ilike(company_name.strip()))
+    )
+    company = result.scalar_one_or_none()
+    if not company:
+        return None, None
+    result = await db.execute(
+        select(Opportunity).where(Opportunity.company_id == company.id).limit(1)
+    )
+    opportunity = result.scalars().first()
+    return company, opportunity
+
+
 def parse_import_file(filename: str | None, content: bytes) -> list[ImportRow]:
     suffix = Path(filename or "").suffix.lower()
     if suffix == ".csv":
         try:
             reader = csv.DictReader(StringIO(content.decode("utf-8-sig")))
-            return [
+            rows = [
                 ImportRow(index, {_clean(key): _clean(value) for key, value in raw.items() if key})
                 for index, raw in enumerate(reader, start=2)
             ]
         except UnicodeDecodeError as exc:
             raise ValueError("CSV files must be UTF-8 encoded") from exc
-    if suffix == ".xlsx":
+    elif suffix == ".xlsx":
         try:
             worksheet = load_workbook(BytesIO(content), read_only=True, data_only=True).active
-            rows = worksheet.iter_rows(values_only=True)
-            headers = [_clean(value) for value in next(rows, ())]
-            return [
+            rows_iter = worksheet.iter_rows(values_only=True)
+            headers = [_clean(value) for value in next(rows_iter, ())]
+            rows = [
                 ImportRow(
                     index,
                     {
@@ -79,11 +130,13 @@ def parse_import_file(filename: str | None, content: bytes) -> list[ImportRow]:
                         if column < len(headers) and headers[column]
                     },
                 )
-                for index, raw in enumerate(rows, start=2)
+                for index, raw in enumerate(rows_iter, start=2)
             ]
         except Exception as exc:
             raise ValueError("The XLSX file could not be read") from exc
-    raise ValueError("Only .csv and .xlsx files are supported")
+    else:
+        raise ValueError("Only .csv and .xlsx files are supported")
+    return [_canonicalise_row(row) for row in rows]
 
 
 def _metadata_notes(row: ImportRow) -> str | None:
@@ -97,23 +150,39 @@ def _metadata_notes(row: ImportRow) -> str | None:
 
 async def _decide(row: ImportRow, db: AsyncSession) -> ImportDecision:
     lead_id = row.values.get("lead_id", "")
-    if not lead_id:
-        return ImportDecision(row, "skip", "Missing lead_id")
-    opportunity = await db.get(Opportunity, lead_id)
-    if not opportunity:
-        return ImportDecision(row, "skip", "Unknown lead_id")
-    if not opportunity.company_id:
-        return ImportDecision(row, "skip", "Lead has no linked company", opportunity)
+    company_name = row.values.get("company", "")
+
+    opportunity = None
+    company_id = None
+
+    if lead_id:
+        opportunity = await db.get(Opportunity, lead_id)
+        if not opportunity:
+            return ImportDecision(row, "skip", "Unknown lead_id")
+        if not opportunity.company_id:
+            return ImportDecision(row, "skip", "Lead has no linked company", opportunity)
+        company_id = opportunity.company_id
+    elif company_name:
+        company, opportunity = await _find_company_and_opportunity(company_name, db)
+        if not company:
+            return ImportDecision(row, "skip", f"Unknown company: {company_name}")
+        company_id = company.id
+        if not company_id:
+            return ImportDecision(row, "skip", "Company has no id")
+    else:
+        return ImportDecision(row, "skip", "Missing lead_id or company")
 
     email = row.values.get("contact_email", "").lower()
     phone = row.values.get("contact_phone", "")
     if not email and not phone:
-        return ImportDecision(row, "skip", "No email or phone to import", opportunity)
+        return ImportDecision(
+            row, "skip", "No email or phone to import", opportunity, None, company_id
+        )
     if email and not EMAIL_PATTERN.match(email):
-        return ImportDecision(row, "skip", "Invalid contact_email", opportunity)
+        return ImportDecision(row, "skip", "Invalid contact_email", opportunity, None, company_id)
 
     contacts = (
-        (await db.execute(select(Contact).where(Contact.company_id == opportunity.company_id)))
+        (await db.execute(select(Contact).where(Contact.company_id == company_id)))
         .scalars()
         .all()
     )
@@ -138,10 +207,10 @@ async def _decide(row: ImportRow, db: AsyncSession) -> ImportDecision:
         )
         if protected:
             return ImportDecision(
-                row, "skip", "Email belongs to a protected existing contact", opportunity
+                row, "skip", "Email belongs to a protected existing contact", opportunity, None, company_id
             )
         if matching:
-            return ImportDecision(row, "update", "Update imported contact", opportunity, matching)
+            return ImportDecision(row, "update", "Update imported contact", opportunity, matching, company_id)
     if phone:
         matching = next(
             (
@@ -153,7 +222,7 @@ async def _decide(row: ImportRow, db: AsyncSession) -> ImportDecision:
             None,
         )
         if matching:
-            return ImportDecision(row, "update", "Update imported contact", opportunity, matching)
+            return ImportDecision(row, "update", "Update imported contact", opportunity, matching, company_id)
     name = row.values.get("contact_name", "")
     if name:
         first_name, last_name = _split_name(name)
@@ -167,14 +236,15 @@ async def _decide(row: ImportRow, db: AsyncSession) -> ImportDecision:
             None,
         )
         if matching:
-            return ImportDecision(row, "update", "Update imported contact", opportunity, matching)
-    return ImportDecision(row, "create", "Create imported contact", opportunity)
+            return ImportDecision(row, "update", "Update imported contact", opportunity, matching, company_id)
+    return ImportDecision(row, "create", "Create imported contact", opportunity, None, company_id)
 
 
 def _result(decision: ImportDecision) -> dict[str, object]:
     return {
         "row": decision.row.row_number,
         "lead_id": decision.row.values.get("lead_id") or None,
+        "company": decision.row.values.get("company") or None,
         "action": decision.action,
         "message": decision.message,
     }
@@ -183,8 +253,10 @@ def _result(decision: ImportDecision) -> dict[str, object]:
 async def preview_import(rows: list[ImportRow], db: AsyncSession) -> dict[str, object]:
     if not rows:
         raise ValueError("The import file contains no data rows")
-    if not any("lead_id" in row.values for row in rows):
-        raise ValueError("The import file must include a lead_id column")
+    has_lead_id = any("lead_id" in row.values for row in rows)
+    has_company = any("company" in row.values for row in rows)
+    if not has_lead_id and not has_company:
+        raise ValueError("The import file must include a lead_id or company column")
     decisions = [await _decide(row, db) for row in rows]
     return {
         "total_rows": len(decisions),
@@ -201,11 +273,12 @@ async def apply_import(rows: list[ImportRow], db: AsyncSession) -> dict[str, obj
     applied = 0
     for row in rows:
         decision = await _decide(row, db)
-        if (
-            decision.action == "skip"
-            or not decision.opportunity
-            or not decision.opportunity.company_id
-        ):
+        if decision.action == "skip":
+            continue
+        company_id = decision.company_id or (
+            decision.opportunity.company_id if decision.opportunity else None
+        )
+        if not company_id:
             continue
         values = row.values
         contact_name = values.get("contact_name", "")
@@ -222,7 +295,7 @@ async def apply_import(rows: list[ImportRow], db: AsyncSession) -> dict[str, obj
                     await db.execute(
                         select(Contact.id)
                         .where(
-                            Contact.company_id == decision.opportunity.company_id,
+                            Contact.company_id == company_id,
                             Contact.is_primary.is_(True),
                         )
                         .limit(1)
@@ -230,7 +303,7 @@ async def apply_import(rows: list[ImportRow], db: AsyncSession) -> dict[str, obj
                 ).scalar_one_or_none()
             )
             decision.contact = Contact(
-                company_id=decision.opportunity.company_id,
+                company_id=company_id,
                 first_name=first_name,
                 last_name=last_name,
                 job_title=job_title or None,
@@ -252,7 +325,7 @@ async def apply_import(rows: list[ImportRow], db: AsyncSession) -> dict[str, obj
                 decision.contact.phone_direct = phone
             if notes:
                 decision.contact.notes = notes
-        affected_company_ids.add(decision.opportunity.company_id)
+        affected_company_ids.add(company_id)
         applied += 1
 
     await db.flush()

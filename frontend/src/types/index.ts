@@ -181,6 +181,29 @@ export const STAGE_COLORS: Record<Stage, string> = {
   funded: 'border-l-emerald-500',
 };
 
+export const WORKFLOW_NEXT: Partial<Record<Stage, Stage>> = {
+  new_lead: 'client_contacted',
+  client_contacted: 'qualified_lead',
+  qualified_lead: 'won_opportunity',
+  won_opportunity: 'credit_preparation',
+  credit_preparation: 'credit_review',
+  credit_review: 'pre_approved',
+  pre_approved: 'conditions_precedent',
+  conditions_precedent: 'term_sheet_sent',
+  term_sheet_sent: 'term_sheet_received',
+  term_sheet_received: 'contracts_sent',
+  contracts_sent: 'contracts_received',
+  contracts_received: 'ready_to_rff',
+  ready_to_rff: 'funded',
+};
+
+export const STAGE_ORDER: Stage[] = [
+  'new_lead', 'client_contacted', 'qualified_lead', 'won_opportunity',
+  'credit_preparation', 'credit_review', 'pre_approved', 'conditions_precedent',
+  'term_sheet_sent', 'term_sheet_received', 'contracts_sent', 'contracts_received',
+  'ready_to_rff', 'funded',
+];
+
 export interface RadarAward {
   id: string;
   tender_title: string;
