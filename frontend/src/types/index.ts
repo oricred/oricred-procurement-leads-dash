@@ -275,3 +275,59 @@ export interface User {
   name: string;
   role: string;
 }
+
+export interface YearlyCount {
+  year: number;
+  count: number;
+}
+
+export interface YearlyValue {
+  year: number;
+  value: number;
+}
+
+export interface ProvinceCount {
+  province: string;
+  count: number;
+}
+
+export interface SourceCount {
+  source: string;
+  count: number;
+}
+
+export interface StatusCount {
+  status: string;
+  count: number;
+}
+
+export interface BuyerCount {
+  buyer_org_id: string;
+  count: number;
+}
+
+export interface CategoryCount {
+  category_id: string;
+  count: number;
+}
+
+export interface StatsData {
+  awards_per_year: YearlyCount[];
+  tenders_per_year: YearlyCount[];
+  award_value_per_year: YearlyValue[];
+  total_awards: number;
+  total_tenders: number;
+  total_leads: number;
+  total_watching: number;
+  past_due_count: number;
+  total_award_value: number | null;
+  avg_award_value: number | null;
+  leads_from_awards: number;
+  conversion_rate: number;
+  leads_per_stage: { stage: string; count: number }[];
+  awards_by_province: ProvinceCount[];
+  awards_by_source: SourceCount[];
+  tenders_by_status: StatusCount[];
+  top_buyers: BuyerCount[];
+  top_categories: CategoryCount[];
+}
