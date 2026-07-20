@@ -10,7 +10,7 @@ class ContactRead(BaseModel):
     first_name: str
     last_name: str
     job_title: str | None = None
-    email: str
+    email: str | None = None
     phone_direct: str | None = None
     phone_mobile: str | None = None
     linkedin_url: str | None = None
@@ -27,7 +27,7 @@ class ContactCreate(BaseModel):
     first_name: str
     last_name: str
     job_title: str | None = None
-    email: str
+    email: str | None = None
     phone_direct: str | None = None
     phone_mobile: str | None = None
     linkedin_url: str | None = None

@@ -58,7 +58,23 @@ export const leads = {
     api.get<{ items: Opportunity[]; total: number }>('/leads', { params }),
   export: (params?: Record<string, unknown>) =>
     api.get<Blob>('/leads/export', { params, responseType: 'blob' }),
+  previewContactImport: (file: File) => {
+    const data = new FormData();
+    data.append('file', file);
+    return api.post<LeadContactImportResult>('/leads/contact-import/preview', data);
+  },
+  applyContactImport: (file: File) => {
+    const data = new FormData();
+    data.append('file', file);
+    return api.post<LeadContactImportResult>('/leads/contact-import/apply', data);
+  },
 };
+
+export interface LeadContactImportResult {
+  total_rows: number; creates: number; updates: number; skips: number; applied?: number;
+  rows: Array<{ row: number; lead_id: string | null; action: 'create' | 'update' | 'skip'; message: string }>;
+}
+
 export const radar = {
   get: () => api.get<RadarData>('/radar'),
 };
@@ -66,7 +82,6 @@ export const radar = {
 export const watchlist = {
   list: () => api.get<{ items: WatchlistItem[]; total: number }>('/watchlist'),
 };
-
 export const dashboard = {
   stats: () => api.get<DashboardStats>('/dashboard/stats'),
 };

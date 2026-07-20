@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Mail, Phone, Search, UserRound, RefreshCcw, ArrowRightCircle, Download } from 'lucide-react';
 import { leads } from '../services/api';
 import type { Opportunity } from '../types';
 import OpportunityModal from '../components/OpportunityModal';
 import HelpLink from '../components/HelpLink';
+import LeadContactImport from '../components/LeadContactImport';
 
 function formatCurrency(value: number | null): string {
   if (!value) return '—';
@@ -25,6 +26,7 @@ function priorityTone(score: number | null): string {
 }
 
 export default function LeadsPage() {
+  const queryClient = useQueryClient();
   const [selectedOpp, setSelectedOpp] = useState<Opportunity | null>(null);
   const [query, setQuery] = useState('');
   const [contactability, setContactability] = useState('');
@@ -96,6 +98,7 @@ export default function LeadsPage() {
             <option value="contactable">Contactable</option>
             <option value="needs_contact">Needs contact</option>
           </select>
+          <LeadContactImport onImported={() => void queryClient.invalidateQueries({ queryKey: ['leads'] })} />
           <button
             onClick={exportCsv}
             disabled={isExporting}

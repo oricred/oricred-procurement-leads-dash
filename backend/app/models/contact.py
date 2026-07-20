@@ -16,7 +16,7 @@ class Contact(Base):
     first_name: Mapped[str] = mapped_column(String(128), nullable=False)
     last_name: Mapped[str] = mapped_column(String(128), nullable=False)
     job_title: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    email: Mapped[str] = mapped_column(String(256), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(256), nullable=True)
     phone_direct: Mapped[str | None] = mapped_column(String(32), nullable=True)
     phone_mobile: Mapped[str | None] = mapped_column(String(32), nullable=True)
     linkedin_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
