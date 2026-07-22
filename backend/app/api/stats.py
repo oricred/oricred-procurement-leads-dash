@@ -30,7 +30,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     # --- Awards per year ---
     rows = await db.execute(
         select(func.extract("YEAR", Award.award_date).label("year"), func.count().label("count"))
-        .where(Award.award_date.isnot(None))
+        .where(Award.award_date.isnot(None), func.isfinite(Award.award_date))
         .group_by(func.extract("YEAR", Award.award_date))
         .order_by(func.extract("YEAR", Award.award_date).desc())
     )
@@ -40,6 +40,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     tender_year = func.coalesce(Tender.published_at, Tender.closing_date, Tender.discovered_at)
     rows = await db.execute(
         select(func.extract("YEAR", tender_year).label("year"), func.count().label("count"))
+        .where(func.isfinite(tender_year))
         .group_by(func.extract("YEAR", tender_year))
         .order_by(func.extract("YEAR", tender_year).desc())
     )
@@ -51,7 +52,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
             func.extract("YEAR", Award.award_date).label("year"),
             func.sum(Award.amount).label("value"),
         )
-        .where(Award.award_date.isnot(None), Award.amount.isnot(None))
+        .where(Award.award_date.isnot(None), Award.amount.isnot(None), func.isfinite(Award.award_date))
         .group_by(func.extract("YEAR", Award.award_date))
         .order_by(func.extract("YEAR", Award.award_date).desc())
     )
