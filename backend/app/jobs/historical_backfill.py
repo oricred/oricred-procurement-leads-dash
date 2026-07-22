@@ -202,7 +202,7 @@ async def _process_award_chunk(
             continue
 
         company = await _upsert_awarded_company(db, raw, company_by_name, now)
-        supplier = raw.get("supplier_name", "Unknown")
+        supplier = raw.get("supplier_name") or "Unknown"
 
         award_api_id = _award_api_id(raw)
         award = (await db.execute(select(Award).where(Award.api_id == award_api_id))).scalar_one_or_none()
@@ -314,9 +314,12 @@ async def backfill_historical_awards() -> int:
             total_processed = state.total_processed
             total_errors = state.errors
 
-            while since >= state.target_lower_bound:
+            while True:
                 chunk_until = until
                 chunk_since = max(since, state.target_lower_bound)
+
+                if chunk_since >= chunk_until:
+                    break  # nothing left to process
 
                 logger.info(
                     "historical_backfill_chunk",
@@ -375,6 +378,11 @@ async def backfill_historical_awards() -> int:
                 # Move to next chunk (walk backward)
                 until = chunk_since
                 since = until - timedelta(days=HISTORICAL_AWARD_CHUNK_DAYS)
+
+                if since < state.target_lower_bound:
+                    # One more iteration covers the final truncated chunk
+                    # (since will be clamped to target_lower_bound by max() above)
+                    continue
 
             # Mark as completed
             async with async_session() as update_db:

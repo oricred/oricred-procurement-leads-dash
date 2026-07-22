@@ -30,10 +30,12 @@ export default function AwardsPage() {
 
   useEffect(() => {
     const next = new URLSearchParams(filters);
+    const existingTab = params.get('tab');
+    if (existingTab) next.set('tab', existingTab);
     if (page > 1) next.set('page', String(page));
     next.set('sort', sort); next.set('direction', direction);
     setParams(next, { replace: true });
-  }, [filters, page, sort, direction, setParams]);
+  }, [filters, page, sort, direction, setParams, params]);
   const queryParams = { ...filters, page, page_size: 50, sort, direction };
   const { data, isLoading, isError, refetch } = useQuery({ queryKey: ['awards', queryParams], queryFn: async () => (await awardsApi.list(queryParams)).data });
   const { data: orgs } = useQuery({ queryKey: ['organizations'], queryFn: async () => (await organizationsApi.list()).data, staleTime: 300000 });

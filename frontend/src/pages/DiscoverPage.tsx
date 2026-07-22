@@ -8,7 +8,7 @@ import MatchingPage from './MatchingPage';
 import StatsPage from './StatsPage';
 import HelpLink from '../components/HelpLink';
 
-const tabs = [['awards', 'Awards'], ['tenders', 'Tenders'], ['watching', 'Watching'], ['stats', 'Statistics'], ['past-due', 'Past Due'], ['history', 'Supplier History']] as const;
+const tabs = [['stats', 'Statistics'], ['awards', 'Awards'], ['tenders', 'Tenders'], ['watching', 'Watching'], ['past-due', 'Past Due'], ['history', 'Supplier History']] as const;
 export default function DiscoverPage() {
   const [params] = useSearchParams(); const tab = tabs.some(([v]) => v === params.get('tab')) ? params.get('tab')! : 'stats';
   const content = tab === 'tenders' ? <TendersPage /> : tab === 'watching' ? <MatchingPage /> : tab === 'stats' ? <StatsPage /> : tab === 'past-due' ? <PastDuePage /> : tab === 'history' ? <HistoricalContactsPage /> : <AwardsPage />;

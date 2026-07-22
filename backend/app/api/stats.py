@@ -37,11 +37,11 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     awards_per_year = [YearlyCount(year=int(r.year), count=int(r.count)) for r in rows.all()]
 
     # --- Tenders per year ---
+    tender_year = func.coalesce(Tender.published_at, Tender.closing_date, Tender.discovered_at)
     rows = await db.execute(
-        select(func.extract("YEAR", Tender.published_at).label("year"), func.count().label("count"))
-        .where(Tender.published_at.isnot(None))
-        .group_by(func.extract("YEAR", Tender.published_at))
-        .order_by(func.extract("YEAR", Tender.published_at).desc())
+        select(func.extract("YEAR", tender_year).label("year"), func.count().label("count"))
+        .group_by(func.extract("YEAR", tender_year))
+        .order_by(func.extract("YEAR", tender_year).desc())
     )
     tenders_per_year = [YearlyCount(year=int(r.year), count=int(r.count)) for r in rows.all()]
 

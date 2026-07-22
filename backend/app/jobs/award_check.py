@@ -307,7 +307,7 @@ async def check_awards_for_watching(backfill: bool = False):
                 if not tender:
                     continue
                 company = await _upsert_awarded_company(db, raw, company_by_name, now)
-                supplier = raw.get("supplier_name", "Unknown")
+                supplier = raw.get("supplier_name") or "Unknown"
                 await _upsert_buyer_organization(db, tsa_db, tender, now)
 
                 award_api_id = _award_api_id(raw)
