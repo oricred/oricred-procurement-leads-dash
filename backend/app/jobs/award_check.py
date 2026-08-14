@@ -36,6 +36,7 @@ from app.services.email_alert import EmailAlertService
 from app.services.funding_suitability import compute_funding_suitability
 from app.services.lead_scoring import refresh_lead_scoring
 from app.services.lead_service import retry_contact_lookup_for_opportunity, retry_new_lead_contact_lookups
+from app.services.qualification import QualificationService
 from app.services.text_utils import best_title
 from app.workflow import WORKFLOW_STAGES
 
@@ -79,27 +80,75 @@ def _award_api_id(raw: dict) -> str:
     return f"award:{hashlib.sha1(identity.encode('utf-8')).hexdigest()[:32]}"
 
 
+def _parse_lenient(value: Any) -> datetime | None:
+    """Parse a source timestamp without applying MAX_VALID_YEAR."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def _resolve_award_date(
     raw_date: Any,
     source_created_at: datetime | None,
     discovered_at: datetime,
     now: datetime,
+    *,
+    publication_date: Any = None,
+    tender_published_at: Any = None,
+    tender_closing_date: Any = None,
 ) -> datetime:
-    """Resolve award date. Never returns None.
+    """Return a domain-valid award date, using source context when recovery is needed."""
+    resolved_now = parse_datetime(now) or datetime.now(timezone.utc)
+    discovered = parse_datetime(discovered_at) or resolved_now
+    publication = parse_datetime(publication_date)
+    tender_published = parse_datetime(tender_published_at)
+    tender_closing = parse_datetime(tender_closing_date)
+    earliest_candidates = [value for value in (tender_published, tender_closing) if value]
+    earliest = max(earliest_candidates) if earliest_candidates else None
 
-    Priority:
-    1. Raw date from source — if it parses and is sane, use as-is
-    2. Source created_at — the full timestamp from TSA DB (entire date, no substitution)
-    3. discovered_at — when we first saw the record
-    """
-    dt = parse_datetime(raw_date)
-    if dt is not None and dt <= discovered_at:
-        return dt
+    def valid(candidate: datetime) -> bool:
+        return (
+            candidate <= discovered
+            and (earliest is None or candidate >= earliest)
+            and (publication is None or candidate <= publication)
+        )
 
-    if source_created_at is not None and source_created_at <= now:
-        return source_created_at
+    direct = parse_datetime(raw_date)
+    if direct is not None and valid(direct):
+        return direct
 
-    return discovered_at if discovered_at <= now else now
+    raw_lenient = _parse_lenient(raw_date)
+    if raw_lenient is not None:
+        reference_years = [
+            value.year
+            for value in (publication, tender_published, tender_closing, discovered)
+            if value is not None
+        ]
+        reference_years.append(discovered.year - 1)
+        for year in dict.fromkeys(reference_years):
+            try:
+                corrected = raw_lenient.replace(year=year)
+            except ValueError:
+                continue
+            if publication is not None and corrected > publication:
+                if (earliest is None or publication >= earliest) and publication <= discovered:
+                    return publication
+                continue
+            if valid(corrected):
+                return corrected
+
+    # Source created_at is intentionally not used as an award date: it is an
+    # ingestion cursor, not a procurement event. Prefer business-date proxies.
+    for proxy in (publication, tender_published, tender_closing, discovered):
+        if proxy is not None and proxy <= discovered and proxy <= resolved_now:
+            return proxy
+    return resolved_now
 
 
 async def _upsert_awarded_company(db, raw: dict, company_by_name: dict[str, dict], now: datetime) -> Company:
@@ -250,12 +299,17 @@ async def check_awards_for_watching(backfill: bool = False):
             new_opportunity_ids: list[str] = []
             ingested_award_timestamps: list[datetime] = []
             state = await db.get(AwardIngestionState, "tenders_sa")
-            since = now - timedelta(days=AWARD_INGEST_LOOKBACK_DAYS) if backfill else (state.latest_award_at if state and state.latest_award_at else now - timedelta(days=AWARD_INGEST_LOOKBACK_DAYS))
+            watermark = state.latest_award_at if state and state.latest_award_at else now
+            since = (
+                now - timedelta(days=AWARD_INGEST_LOOKBACK_DAYS)
+                if backfill
+                else watermark - timedelta(days=AWARD_INGEST_LOOKBACK_DAYS)
+            )
             raw_awards: list[dict] = []
             try:
                 for page in range(AWARD_INGEST_MAX_PAGES):
                     batch = await tsa_db.query_awards(
-                        filters={"since": since.replace(tzinfo=None) if isinstance(since, datetime) and since.tzinfo else since},
+                        filters={"created_since": since.replace(tzinfo=None) if since.tzinfo else since},
                         fields=AWARD_FIELDS,
                         limit=AWARD_INGEST_LIMIT,
                         offset=page * AWARD_INGEST_LIMIT,
@@ -267,8 +321,8 @@ async def check_awards_for_watching(backfill: bool = False):
                 else:
                     logger.warning("award_ingestion_page_limit_reached", pages=AWARD_INGEST_MAX_PAGES, since=since.isoformat())
             except Exception as exc:
-                logger.error("award_ingestion_query_failed", error=str(exc))
-                raw_awards = []
+                logger.exception("award_ingestion_query_failed", error=str(exc))
+                raise
 
             tender_api_ids = list({str(raw["tender_id"]) for raw in raw_awards if raw.get("tender_id")})
             tender_by_api_id: dict[str, dict] = {}
@@ -321,15 +375,19 @@ async def check_awards_for_watching(backfill: bool = False):
                 award.supplier_name = supplier
                 award.supplier_company_id = company.api_id
                 award.amount = raw.get("amount")
-                award.publication_date = parse_datetime(raw.get("publication_date"))
+                if "publication_date" in raw:
+                    award.publication_date = parse_datetime(raw.get("publication_date"))
                 award.source_created_at = parse_datetime(raw.get("created_at"))
                 award.award_date = _resolve_award_date(
                     raw.get("award_date"), award.source_created_at, award.discovered_at, now,
+                    publication_date=award.publication_date,
+                    tender_published_at=tender.published_at,
+                    tender_closing_date=tender.closing_date,
                 )
                 award.bee_level = raw.get("bee_level")
                 award.bee_points = raw.get("bee_points")
                 award.buyer_org_id = tender.buyer_org_id
-                timestamp = award.award_date
+                timestamp = award.source_created_at
                 if timestamp:
                     ingested_award_timestamps.append(timestamp)
 
@@ -341,6 +399,18 @@ async def check_awards_for_watching(backfill: bool = False):
 
                 existing_opp = await db.execute(select(Opportunity).where(Opportunity.award_id == award.id))
                 if existing_opp.scalar_one_or_none():
+                    continue
+                qualification = await QualificationService(db).evaluate_award_lead(
+                    tender, award, company,
+                )
+                if not qualification.passed:
+                    logger.info(
+                        "automatic_lead_rejected",
+                        award_id=award.api_id,
+                        tender_id=tender.api_id,
+                        filter=qualification.failed_filter,
+                        reason=qualification.reason,
+                    )
                     continue
                 opp = Opportunity(
                     tender_id=tender.id, award_id=award.id, company_id=company.id,
@@ -374,7 +444,7 @@ async def check_awards_for_watching(backfill: bool = False):
                     elif not state.latest_award_at or latest_award_at > state.latest_award_at:
                         state.latest_award_at = latest_award_at
                 else:
-                    logger.warning("all_award_timestamps_in_future", count=len(ingested_award_timestamps))
+                    logger.warning("all_award_source_timestamps_in_future", count=len(ingested_award_timestamps))
             await db.commit()
 
             contacts_added = 0
@@ -463,6 +533,9 @@ async def fix_corrupted_award_dates() -> int:
             recovered = _resolve_award_date(
                 award.raw_payload.get("award_date") if award.raw_payload else None,
                 award.source_created_at, award.discovered_at, now,
+                publication_date=award.publication_date,
+                tender_published_at=tender.published_at if tender else None,
+                tender_closing_date=tender.closing_date if tender else None,
             )
             if recovered != original:
                 award.award_date = recovered

@@ -7,7 +7,11 @@ from app.database import Base
 
 
 class AwardIngestionState(Base):
-    """Durable per-source cursor for incremental award ingestion."""
+    """Durable per-source cursor for incremental award ingestion.
+
+    ``latest_award_at`` is retained as the deployed database column name, but
+    stores the latest source-created timestamp for Tenders-SA ingestion.
+    """
 
     __tablename__ = "award_ingestion_state"
 

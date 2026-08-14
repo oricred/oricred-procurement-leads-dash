@@ -43,7 +43,7 @@ SOURCE_MAP = {
 TENDER_FIELDS = [
     "tender_id", "title", "description", "estimated_value", "province",
     "category_id", "closing_date", "source_organization_id",
-    "source_organization", "type", "publication_date",
+    "source_organization", "organization_type", "type", "publication_date",
     "ai_title_enriched",
 ]
 TENDER_INGEST_PAGE_SIZE = 1_000
@@ -56,31 +56,34 @@ async def _process_tender(raw: dict, db, now: datetime) -> int:
         return 0
 
     existing = await db.execute(select(Tender).where(Tender.api_id == api_id))
-    if existing.scalar_one_or_none():
-        return 0
+    tender = existing.scalar_one_or_none()
 
     org_id = raw.get("source_organization_id")
     org_name = raw.get("source_organization", org_id or "")
     if org_id:
         org_result = await db.execute(select(Organization).where(Organization.id == org_id))
-        if not org_result.scalar_one_or_none():
-            db.add(Organization(id=org_id, name=org_name))
+        org = org_result.scalar_one_or_none()
+        if not org:
+            org = Organization(id=org_id, name=org_name)
+            db.add(org)
+        else:
+            org.name = org_name or org.name
+        org.organization_type = raw.get("organization_type") or org.organization_type
 
-    tender = Tender(
-        api_id=api_id,
-        raw_payload=_sanitize(raw),
-        title=best_title(raw),
-        description=raw.get("description"),
-        estimated_value=raw.get("estimated_value"),
-        province=raw.get("province"),
-        category_id=raw.get("category_id"),
-        closing_date=parse_datetime(raw.get("closing_date")),
-        buyer_org_id=org_id,
-        tender_type=raw.get("type"),
-        published_at=parse_datetime(raw.get("publication_date")),
-        discovered_at=now,
-    )
-    db.add(tender)
+    if tender is None:
+        tender = Tender(api_id=api_id, raw_payload={}, title=best_title(raw), discovered_at=now)
+        db.add(tender)
+
+    tender.raw_payload = _sanitize(raw)
+    tender.title = best_title(raw)
+    tender.description = raw.get("description")
+    tender.estimated_value = raw.get("estimated_value")
+    tender.province = raw.get("province")
+    tender.category_id = raw.get("category_id")
+    tender.closing_date = parse_datetime(raw.get("closing_date"))
+    tender.buyer_org_id = org_id
+    tender.tender_type = raw.get("type")
+    tender.published_at = parse_datetime(raw.get("publication_date"))
     await db.flush()
 
     await _qualify_and_watch(tender, db, now)
@@ -132,17 +135,28 @@ async def _qualify_and_watch(tender: Tender, db, now: datetime) -> int:
     if not result.passed:
         return 0
 
+    existing = (
+        await db.execute(select(WatchlistItem).where(WatchlistItem.tender_id == tender.id))
+    ).scalar_one_or_none()
+
     timing = AwardTimingService(db)
     start, end = await timing.get_expected_window(
         tender.buyer_org_id, tender.category_id, tender.closing_date
     )
-    db.add(WatchlistItem(
-        tender_id=tender.id,
-        status="watching",
-        expected_window_start=start,
-        expected_window_end=end,
-        started_watching_at=now,
-    ))
+    if existing:
+        if existing.status == "watching":
+            existing.expected_window_start = start
+            existing.expected_window_end = end
+        return 0
+    db.add(
+        WatchlistItem(
+            tender_id=tender.id,
+            status="watching",
+            expected_window_start=start,
+            expected_window_end=end,
+            started_watching_at=now,
+        )
+    )
     return 1
 
 
@@ -189,8 +203,8 @@ async def discover_new_tenders():
                 else:
                     logger.warning("tender_ingestion_page_limit_reached", pages=TENDER_INGEST_MAX_PAGES)
             except Exception as e:
-                logger.error("tender_query_failed", error=str(e))
-                raw_tenders = []
+                logger.exception("tender_query_failed", error=str(e))
+                raise
 
             for raw in raw_tenders:
                 count += await _process_tender(raw, db, now)
@@ -237,7 +251,7 @@ async def discover_new_tenders():
                     logger.info("api_source_configured", source=src_key, name=src_name, base_url=src_cfg.get("base_url"))
 
             await db.commit()
-            logger.info("tenders_ingested", source="tenders_sa", new=count, queried=len(raw_tenders))
+            logger.info("tenders_synced", source="tenders_sa", processed=count, queried=len(raw_tenders))
             return count
 
     finally:

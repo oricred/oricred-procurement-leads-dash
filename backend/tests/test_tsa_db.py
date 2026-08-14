@@ -98,6 +98,11 @@ class TestBuildTenderWhere:
 
 
 class TestBuildAwardWhere:
+    def test_source_created_cursor_includes_legacy_null_timestamps(self):
+        where, params, join = _build_award_where({"created_since": "2026-01-01"})
+        assert "a.created_at >= :created_since OR a.created_at IS NULL" in where
+        assert params["created_since"] == "2026-01-01"
+
     def test_tender_ids_filter(self):
         where, params, join = _build_award_where({"tender_ids": ["id1", "id2"]})
         assert "a.tender_id = ANY(:tender_ids)" in where

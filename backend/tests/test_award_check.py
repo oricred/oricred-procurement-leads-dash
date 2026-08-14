@@ -16,17 +16,24 @@ class TestResolveAwardDate:
         r = _resolve_award_date("2025-06-17", None, DISCOVERED, NOW)
         assert r == _dt(2025, 6, 17)
 
-    def test_corrupt_raw_date_falls_to_source_created(self):
-        r = _resolve_award_date("2099-10-09", _dt(2025, 4, 15), DISCOVERED, NOW)
-        assert r == _dt(2025, 4, 15)
+    def test_corrupt_year_is_reconstructed_from_publication_year(self):
+        r = _resolve_award_date(
+            "2099-10-09", None, DISCOVERED, NOW,
+            publication_date="2025-12-01",
+            tender_closing_date="2025-03-01",
+        )
+        assert r == _dt(2025, 10, 9)
 
-    def test_corrupt_raw_no_source_created_falls_to_discovered(self):
+    def test_corrupt_raw_without_context_falls_to_discovered(self):
         r = _resolve_award_date("2099-10-09", None, DISCOVERED, NOW)
         assert r == DISCOVERED
 
-    def test_null_raw_date_falls_to_source_created(self):
-        r = _resolve_award_date(None, _dt(2025, 6, 1), DISCOVERED, NOW)
-        assert r == _dt(2025, 6, 1)
+    def test_null_raw_date_uses_publication_not_source_created(self):
+        r = _resolve_award_date(
+            None, _dt(2025, 6, 1), DISCOVERED, NOW,
+            publication_date="2025-06-15",
+        )
+        assert r == _dt(2025, 6, 15)
 
     def test_null_raw_no_source_falls_to_discovered(self):
         r = _resolve_award_date(None, None, DISCOVERED, NOW)
@@ -36,6 +43,23 @@ class TestResolveAwardDate:
         r = _resolve_award_date(None, None, _dt(2099, 1, 1), NOW)
         assert r == NOW
 
-    def test_source_created_used_over_discovered(self):
-        r = _resolve_award_date("2099-10-09", _dt(2025, 6, 1), DISCOVERED, NOW)
-        assert r == _dt(2025, 6, 1)
+    def test_source_created_is_not_used_as_procurement_date(self):
+        r = _resolve_award_date(None, _dt(2025, 6, 1), DISCOVERED, NOW)
+        assert r == DISCOVERED
+
+    def test_award_after_publication_uses_publication_date(self):
+        r = _resolve_award_date(
+            "2025-12-09", None, DISCOVERED, NOW,
+            publication_date="2025-11-01",
+            tender_closing_date="2025-03-01",
+        )
+        assert r == _dt(2025, 11, 1)
+
+    def test_award_before_tender_close_uses_publication_proxy(self):
+        r = _resolve_award_date(
+            "2024-01-01", None, DISCOVERED, NOW,
+            publication_date="2025-07-01",
+            tender_published_at="2025-01-01",
+            tender_closing_date="2025-03-01",
+        )
+        assert r == _dt(2025, 7, 1)
