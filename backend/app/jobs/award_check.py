@@ -44,7 +44,8 @@ logger = structlog.get_logger()
 
 AWARD_FIELDS = [
     "id", "tender_id", "supplier_name", "amount", "award_date",
-    "created_at", "bee_level", "bee_points", "supplier_canonical_id",
+    "created_at", "publication_date", "bee_level", "bee_points",
+    "supplier_canonical_id",
 ]
 TENDER_FIELDS = [
     "id", "tender_id", "title", "description", "estimated_value", "province",
@@ -283,6 +284,57 @@ async def _mark_overdue_watches(db, email: EmailAlertService, now: datetime) -> 
         )
 
 
+async def _fetch_awards_for_ingestion(
+    tsa_db: TSADatabase,
+    since: datetime,
+    legacy_after_id: str | None,
+    legacy_recovery_complete: bool,
+) -> tuple[list[dict], str | None, bool]:
+    raw_awards: list[dict] = []
+    for page in range(AWARD_INGEST_MAX_PAGES):
+        batch = await tsa_db.query_awards(
+            filters={"created_since": since.replace(tzinfo=None) if since.tzinfo else since},
+            fields=AWARD_FIELDS,
+            limit=AWARD_INGEST_LIMIT,
+            offset=page * AWARD_INGEST_LIMIT,
+            direction="asc",
+        )
+        raw_awards.extend(batch)
+        if len(batch) < AWARD_INGEST_LIMIT:
+            break
+    else:
+        logger.warning(
+            "award_ingestion_page_limit_reached",
+            pages=AWARD_INGEST_MAX_PAGES,
+            since=since.isoformat(),
+        )
+
+    if not legacy_recovery_complete:
+        for _ in range(AWARD_INGEST_MAX_PAGES):
+            legacy_batch = await tsa_db.query_awards(
+                filters={
+                    "created_is_null": True,
+                    "legacy_after_id": legacy_after_id,
+                },
+                fields=AWARD_FIELDS,
+                limit=AWARD_INGEST_LIMIT,
+                direction="asc",
+            )
+            raw_awards.extend(legacy_batch)
+            if legacy_batch:
+                legacy_after_id = str(legacy_batch[-1]["id"])
+            if len(legacy_batch) < AWARD_INGEST_LIMIT:
+                legacy_recovery_complete = True
+                break
+        else:
+            logger.info(
+                "legacy_award_recovery_paused",
+                after_id=legacy_after_id,
+                pages=AWARD_INGEST_MAX_PAGES,
+            )
+    return raw_awards, legacy_after_id, legacy_recovery_complete
+
+
 async def check_awards_for_watching(backfill: bool = False):
     """Ingest Tenders-SA awards regardless of watchlist membership.
 
@@ -305,21 +357,19 @@ async def check_awards_for_watching(backfill: bool = False):
                 if backfill
                 else watermark - timedelta(days=AWARD_INGEST_LOOKBACK_DAYS)
             )
-            raw_awards: list[dict] = []
+            legacy_after_id = state.legacy_after_id if state else None
+            legacy_recovery_complete = bool(
+                state and state.legacy_recovery_complete
+            )
             try:
-                for page in range(AWARD_INGEST_MAX_PAGES):
-                    batch = await tsa_db.query_awards(
-                        filters={"created_since": since.replace(tzinfo=None) if since.tzinfo else since},
-                        fields=AWARD_FIELDS,
-                        limit=AWARD_INGEST_LIMIT,
-                        offset=page * AWARD_INGEST_LIMIT,
-                        direction="asc",
+                raw_awards, legacy_after_id, legacy_recovery_complete = (
+                    await _fetch_awards_for_ingestion(
+                        tsa_db,
+                        since,
+                        legacy_after_id,
+                        legacy_recovery_complete,
                     )
-                    raw_awards.extend(batch)
-                    if len(batch) < AWARD_INGEST_LIMIT:
-                        break
-                else:
-                    logger.warning("award_ingestion_page_limit_reached", pages=AWARD_INGEST_MAX_PAGES, since=since.isoformat())
+                )
             except Exception as exc:
                 logger.exception("award_ingestion_query_failed", error=str(exc))
                 raise
@@ -434,17 +484,22 @@ async def check_awards_for_watching(backfill: bool = False):
                 )
 
             await _mark_overdue_watches(db, email, now)
+            if not state:
+                state = AwardIngestionState(
+                    source="tenders_sa",
+                    latest_award_at=now,
+                )
+                db.add(state)
             if ingested_award_timestamps:
                 valid_timestamps = [ts for ts in ingested_award_timestamps if ts <= now]
                 if valid_timestamps:
                     latest_award_at = max(valid_timestamps)
-                    if not state:
-                        state = AwardIngestionState(source="tenders_sa", latest_award_at=latest_award_at)
-                        db.add(state)
-                    elif not state.latest_award_at or latest_award_at > state.latest_award_at:
+                    if not state.latest_award_at or latest_award_at > state.latest_award_at:
                         state.latest_award_at = latest_award_at
                 else:
                     logger.warning("all_award_source_timestamps_in_future", count=len(ingested_award_timestamps))
+            state.legacy_after_id = legacy_after_id
+            state.legacy_recovery_complete = legacy_recovery_complete
             await db.commit()
 
             contacts_added = 0

@@ -27,6 +27,11 @@ AWARD_COLUMNS: dict[str, str] = {
     "source_created_at": "TIMESTAMPTZ",
 }
 
+AWARD_INGESTION_STATE_COLUMNS: dict[str, str] = {
+    "legacy_after_id": "VARCHAR(64)",
+    "legacy_recovery_complete": "BOOLEAN NOT NULL DEFAULT FALSE",
+}
+
 OPPORTUNITY_COLUMNS = {
     "buyer_preference_score": "NUMERIC(5,2)",
     "related_bidders": "JSON",
@@ -40,6 +45,7 @@ OPPORTUNITY_COLUMNS = {
     "lost_reason": "TEXT",
     "conditions_checklist": "JSON",
     "needs_enrichment": "BOOLEAN NOT NULL DEFAULT FALSE",
+    "lead_origin": "VARCHAR(16) NOT NULL DEFAULT 'automatic'",
 }
 
 
@@ -91,6 +97,33 @@ async def _ensure_award_columns() -> None:
             )
 
 
+async def _ensure_award_ingestion_state_columns() -> None:
+    async with engine.begin() as conn:
+        if conn.dialect.name == "sqlite":
+            existing = {
+                row[1]
+                for row in (
+                    await conn.execute(text("PRAGMA table_info(award_ingestion_state)"))
+                ).fetchall()
+            }
+            for name, definition in AWARD_INGESTION_STATE_COLUMNS.items():
+                if name not in existing:
+                    await conn.execute(
+                        text(
+                            f"ALTER TABLE award_ingestion_state "
+                            f"ADD COLUMN {name} {definition}"
+                        )
+                    )
+            return
+        for name, definition in AWARD_INGESTION_STATE_COLUMNS.items():
+            await conn.execute(
+                text(
+                    f"ALTER TABLE award_ingestion_state "
+                    f"ADD COLUMN IF NOT EXISTS {name} {definition}"
+                )
+            )
+
+
 async def _ensure_contact_email_nullable() -> None:
     """
     Allow externally enriched contacts to be recorded when only a phone is known.
@@ -109,5 +142,6 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
     await _ensure_opportunity_columns()
     await _ensure_award_columns()
+    await _ensure_award_ingestion_state_columns()
     await _ensure_contact_email_nullable()
     logger.info("database_ready", dialect=engine.dialect.name)

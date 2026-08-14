@@ -46,7 +46,9 @@ AWARD_FIELD_MAP: dict[str, str] = {
     "amount": "a.amount",
     "award_date": "a.award_date",
     "created_at": "a.created_at",
-    "publication_date": "a.publication_date",
+    # The column is absent in older TSA deployments. Converting the whole row
+    # to JSON safely returns NULL when the key does not exist.
+    "publication_date": "NULLIF(to_jsonb(a)->>'publication_date', '')",
     "bee_level": "a.bee_level",
     "bee_points": "a.bee_points",
     "status": "a.status",
@@ -262,10 +264,16 @@ def _build_award_where(filters: dict[str, Any] | None) -> tuple[str, dict[str, A
 
     created_since = filters.get("created_since")
     if created_since:
-        # created_at is the stable ingestion cursor. Legacy rows without it are
-        # deliberately re-read; local award IDs make that recovery idempotent.
-        clauses.append("(a.created_at >= :created_since OR a.created_at IS NULL)")
+        clauses.append("a.created_at >= :created_since")
         params["created_since"] = created_since
+
+    if filters.get("created_is_null"):
+        clauses.append("a.created_at IS NULL")
+
+    legacy_after_id = filters.get("legacy_after_id")
+    if legacy_after_id:
+        clauses.append("CAST(a.id AS TEXT) > :legacy_after_id")
+        params["legacy_after_id"] = str(legacy_after_id)
 
     until = filters.get("until") or filters.get("before")
     if until:
@@ -524,13 +532,10 @@ class TSADatabase:
         params["limit"] = limit
         params["offset"] = max(offset, 0)
         order_direction = "ASC" if direction.lower() == "asc" else "DESC"
-        if filters and filters.get("created_since"):
-            # Process cursor-bearing rows before legacy NULL-created rows so a
-            # large legacy recovery set cannot starve newly created awards.
-            order_clause = (
-                f"(a.created_at IS NULL) ASC, "
-                f"a.created_at {order_direction} NULLS LAST, a.id"
-            )
+        if filters and filters.get("created_is_null"):
+            order_clause = f"CAST(a.id AS TEXT) {order_direction}"
+        elif filters and filters.get("created_since"):
+            order_clause = f"a.created_at {order_direction} NULLS LAST, a.id"
         else:
             order_clause = f"a.award_date {order_direction} NULLS LAST, a.id"
 

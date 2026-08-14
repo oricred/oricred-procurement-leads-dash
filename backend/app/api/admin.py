@@ -183,6 +183,7 @@ async def trigger_job(job_name: str, background_tasks: BackgroundTasks, db: Asyn
         "backfill_tenders": "app.jobs.tender_backfill:backfill_stub_tenders",
         "backfill_historical_awards": "app.jobs.historical_backfill:backfill_historical_awards",
         "backfill_historical_tenders": "app.jobs.historical_backfill:backfill_historical_tenders",
+        "requalify_award_leads": "app.jobs.historical_backfill:requalify_existing_award_leads",
     }
     import_path = handlers.get(job_name)
     if not import_path:

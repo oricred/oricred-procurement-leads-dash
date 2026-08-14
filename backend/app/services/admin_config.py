@@ -81,6 +81,7 @@ DEFAULT_JOBS = {
     "fix_corrupted_award_dates": {"enabled": True, "cron": "0 4 * * *", "description": "Repair awards with NULL or future dates"},
     "backfill_historical_awards": {"enabled": False, "cron": "0 1 * * *", "description": "Backfill all historical awards (date-chunked, one-time)"},
     "backfill_historical_tenders": {"enabled": False, "cron": "0 2 * * *", "description": "Backfill tender stubs from historical award ingestion"},
+    "requalify_award_leads": {"enabled": False, "cron": "0 5 * * *", "description": "Reapply current filters to existing automatic award leads"},
 }
 
 CONFIG_DEFAULTS: dict[str, tuple[dict, str]] = {

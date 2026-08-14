@@ -69,7 +69,13 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
             select(func.count()).select_from(WatchlistItem).where(WatchlistItem.status == "watching")
         )
     ).scalar() or 0
-    past_due_count = (await db.execute(select(func.count()).select_from(PastDueQueue))).scalar() or 0
+    past_due_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(PastDueQueue)
+            .where(PastDueQueue.resolution == "pending")
+        )
+    ).scalar() or 0
 
     # --- Value stats ---
     sum_val = (await db.execute(select(func.sum(Award.amount)))).scalar()

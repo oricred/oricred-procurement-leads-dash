@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from app.jobs.award_check import _resolve_award_date
+from app.jobs.award_check import AWARD_FIELDS, _fetch_awards_for_ingestion, _resolve_award_date
 
 
 def _dt(y, m, d, h=0, mi=0):
@@ -71,3 +71,40 @@ class TestResolveAwardDate:
             tender_closing_date="2025-03-01",
         )
         assert r == _dt(2025, 7, 1)
+
+
+def test_award_ingestion_requests_publication_date():
+    assert "publication_date" in AWARD_FIELDS
+
+
+async def test_legacy_award_recovery_resumes_from_keyset(monkeypatch):
+    monkeypatch.setattr("app.jobs.award_check.AWARD_INGEST_LIMIT", 2)
+    monkeypatch.setattr("app.jobs.award_check.AWARD_INGEST_MAX_PAGES", 2)
+
+    class Source:
+        def __init__(self):
+            self.legacy = [
+                {"id": "1"}, {"id": "2"}, {"id": "3"}, {"id": "4"}, {"id": "5"},
+            ]
+
+        async def query_awards(self, *, filters, **kwargs):
+            if "created_since" in filters:
+                return []
+            after = filters.get("legacy_after_id")
+            rows = [row for row in self.legacy if after is None or row["id"] > after]
+            return rows[:kwargs["limit"]]
+
+    source = Source()
+    rows, cursor, complete = await _fetch_awards_for_ingestion(
+        source, DISCOVERED, None, False,
+    )
+    assert [row["id"] for row in rows] == ["1", "2", "3", "4"]
+    assert cursor == "4"
+    assert not complete
+
+    rows, cursor, complete = await _fetch_awards_for_ingestion(
+        source, DISCOVERED, cursor, complete,
+    )
+    assert [row["id"] for row in rows] == ["5"]
+    assert cursor == "5"
+    assert complete

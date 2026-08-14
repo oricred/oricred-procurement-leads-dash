@@ -43,7 +43,11 @@ async def get_radar(db: AsyncSession = Depends(get_db)):
             passed_filter=bool(has_opportunity),
         ))
 
-    count_result = await db.execute(select(func.count()).select_from(PastDueQueue))
+    count_result = await db.execute(
+        select(func.count())
+        .select_from(PastDueQueue)
+        .where(PastDueQueue.resolution == "pending")
+    )
     past_due_count = count_result.scalar() or 0
 
     return RadarData(awards=awards, past_due_count=past_due_count)

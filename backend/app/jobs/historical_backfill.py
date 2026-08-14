@@ -13,7 +13,7 @@ from app.models.award import Award
 from app.models.award_ingestion_state import AwardIngestionState
 from app.models.company import Company
 from app.models.historical_ingestion_state import HistoricalIngestionState
-from app.models.opportunity import Opportunity
+from app.models.opportunity import Opportunity, OpportunityAudit
 from app.models.organization import Organization
 from app.models.tender import Tender
 from app.services.buyer_preference import compute_buyer_preference
@@ -42,6 +42,78 @@ HISTORICAL_AWARD_MAX_PAGES = 100
 
 
 EARLIEST_SANE_YEAR = 2000
+
+
+async def requalify_existing_award_leads(db=None) -> dict[str, int]:
+    """Apply current qualification rules to previously generated award leads.
+
+    Untouched automatic leads that no longer qualify are closed with an audit
+    trail. Leads already being worked are retained and flagged for human review.
+    Explicit manual overrides are never changed.
+    """
+    if db is None:
+        async with async_session() as session:
+            result = await requalify_existing_award_leads(session)
+            await session.commit()
+            return result
+
+    rows = await db.execute(
+        select(Opportunity, Award, Tender, Company)
+        .join(Award, Award.id == Opportunity.award_id)
+        .join(Tender, Tender.id == Opportunity.tender_id)
+        .join(Company, Company.id == Opportunity.company_id)
+        .where(Opportunity.lead_origin != "manual")
+    )
+    checked = closed = flagged = passed = 0
+    service = QualificationService(db)
+    now = datetime.now(timezone.utc)
+    for opportunity, award, tender, company in rows.all():
+        checked += 1
+        qualification = await service.evaluate_award_lead(tender, award, company)
+        if qualification.passed:
+            passed += 1
+            await refresh_lead_scoring(
+                opportunity, db, tender=tender, award=award, company=company,
+            )
+            continue
+
+        reason = qualification.reason or qualification.failed_filter or "Current qualification failed"
+        untouched = (
+            opportunity.kanban_stage == "new_lead"
+            and opportunity.assigned_to is None
+            and opportunity.contacted_at is None
+            and not opportunity.notes
+        )
+        opportunity.risk_flag = "red"
+        opportunity.version += 1
+        opportunity.updated_at = now
+        if untouched:
+            opportunity.kanban_stage = "lost_lead"
+            opportunity.lost_reason = f"Automatic requalification: {reason}"
+            opportunity.closed_at = now
+            opportunity.next_action = None
+            db.add(OpportunityAudit(
+                opportunity_id=opportunity.id,
+                from_stage="new_lead",
+                to_stage="lost_lead",
+                changed_by="system:requalification",
+            ))
+            closed += 1
+        else:
+            opportunity.next_action = "Review qualification"
+            reasons = list(opportunity.lead_priority_reasons or [])
+            marker = f"Qualification review: {reason}"
+            opportunity.lead_priority_reasons = [marker, *reasons][:6]
+            flagged += 1
+
+    logger.info(
+        "award_leads_requalified",
+        checked=checked,
+        passed=passed,
+        closed=closed,
+        flagged=flagged,
+    )
+    return {"checked": checked, "passed": passed, "closed": closed, "flagged": flagged}
 
 
 async def _find_earliest_award_date(tsa_db: TSADatabase) -> datetime | None:
@@ -401,6 +473,8 @@ async def backfill_historical_awards() -> int:
                     continue
 
             # Mark as completed
+            await requalify_existing_award_leads(db)
+            await db.commit()
             async with async_session() as update_db:
                 s = await update_db.get(HistoricalIngestionState, "historical_awards")
                 if s:

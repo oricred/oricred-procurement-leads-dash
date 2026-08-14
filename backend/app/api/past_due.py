@@ -24,6 +24,7 @@ async def list_past_due(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(PastDueQueue, Tender, opportunity_id.label("opportunity_id"))
         .join(Tender, PastDueQueue.tender_id == Tender.id)
+        .where(PastDueQueue.resolution == "pending")
         .order_by(PastDueQueue.entered_queue_at.desc())
     )
     return {"items": [

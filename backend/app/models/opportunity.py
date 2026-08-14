@@ -30,6 +30,9 @@ class Opportunity(Base):
     lost_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     conditions_checklist = Column(JSON, nullable=True)
     needs_enrichment: Mapped[bool] = mapped_column(default=False, nullable=False)
+    lead_origin: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="automatic",
+    )
     related_bidders = Column(JSON, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

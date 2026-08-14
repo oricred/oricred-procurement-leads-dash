@@ -172,6 +172,7 @@ async def create_lead_from_award(award_id: str, db: AsyncSession = Depends(get_d
     opp = Opportunity(
         award_id=award.id, tender_id=award.tender_id, company_id=company.id,
         kanban_stage="new_lead", needs_enrichment=provisional,
+        lead_origin="manual",
         contact_sufficiency="none", next_action="Resolve supplier identity" if provisional else "Find contact",
     )
     db.add(opp)

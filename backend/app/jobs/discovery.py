@@ -24,6 +24,7 @@ from app.models.tender import Tender
 from app.models.category import Category
 from app.models.organization import Organization
 from app.models.watchlist import WatchlistItem
+from app.models.past_due import PastDueQueue
 from app.services.qualification import QualificationService
 from app.services.award_timing import AwardTimingService
 from app.services.municipal_scraper import CityOfCapeTownAdapter, CityOfJoburgAdapter
@@ -130,33 +131,64 @@ async def _process_scraper_tender(result, metro_name: str, db, now: datetime) ->
 
 
 async def _qualify_and_watch(tender: Tender, db, now: datetime) -> int:
-    qual = QualificationService(db)
-    result = await qual.evaluate(tender)
-    if not result.passed:
-        return 0
-
     existing = (
         await db.execute(select(WatchlistItem).where(WatchlistItem.tender_id == tender.id))
     ).scalar_one_or_none()
+    past_due = (
+        await db.execute(select(PastDueQueue).where(PastDueQueue.tender_id == tender.id))
+    ).scalar_one_or_none()
+
+    qual = QualificationService(db)
+    result = await qual.evaluate(tender)
+    if not result.passed:
+        if existing and existing.status != "awarded":
+            existing.status = "unqualified"
+            existing.expected_window_start = None
+            existing.expected_window_end = None
+            existing.past_due_at = None
+        if past_due and past_due.resolution == "pending":
+            past_due.resolution = "unqualified"
+            past_due.resolved_at = now
+        return 0
 
     timing = AwardTimingService(db)
     start, end = await timing.get_expected_window(
         tender.buyer_org_id, tender.category_id, tender.closing_date
     )
     if existing:
-        if existing.status == "watching":
-            existing.expected_window_start = start
-            existing.expected_window_end = end
+        if existing.status == "awarded":
+            return 0
+        existing.expected_window_start = start
+        existing.expected_window_end = end
+        if end is not None and end < now:
+            existing.status = "past_due"
+            existing.past_due_at = existing.past_due_at or now
+            if not past_due:
+                db.add(PastDueQueue(tender_id=tender.id, entered_queue_at=now))
+            elif past_due.resolution != "pending":
+                past_due.resolution = "pending"
+                past_due.resolved_at = None
+                past_due.entered_queue_at = now
+                past_due.poll_count_since_due = 0
+        else:
+            existing.status = "watching"
+            existing.past_due_at = None
+            if past_due and past_due.resolution == "pending":
+                past_due.resolution = "date_extended"
+                past_due.resolved_at = now
         return 0
-    db.add(
-        WatchlistItem(
-            tender_id=tender.id,
-            status="watching",
-            expected_window_start=start,
-            expected_window_end=end,
-            started_watching_at=now,
-        )
-    )
+
+    is_past_due = end is not None and end < now
+    db.add(WatchlistItem(
+        tender_id=tender.id,
+        status="past_due" if is_past_due else "watching",
+        expected_window_start=start,
+        expected_window_end=end,
+        started_watching_at=now,
+        past_due_at=now if is_past_due else None,
+    ))
+    if is_past_due and not past_due:
+        db.add(PastDueQueue(tender_id=tender.id, entered_queue_at=now))
     return 1
 
 
