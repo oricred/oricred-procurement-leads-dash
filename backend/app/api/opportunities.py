@@ -274,6 +274,9 @@ async def transition_opportunity(
         opp.closed_at = datetime.now(timezone.utc)
     elif action == "reopen":
         opp.closed_at = None
+        opp.lost_reason = None
+        opp.credit_decision = None
+        opp.conditions_checklist = None
     db.add(OpportunityAudit(opportunity_id=opp.id, from_stage=old_stage, to_stage=new_stage, changed_by=current_user["name"]))
     await db.commit()
     await db.refresh(opp)
@@ -384,6 +387,7 @@ async def assign_opportunity(opportunity_id: str, assignee: str, db: AsyncSessio
         raise HTTPException(status_code=400, detail="Assignee must be an active user")
     opp.assigned_to = str(target.id) if target else None
     opp.updated_at = datetime.now(timezone.utc)
+    opp.version += 1
     await db.commit()
     try:
         await push_opportunity_to_crm(opportunity_id)

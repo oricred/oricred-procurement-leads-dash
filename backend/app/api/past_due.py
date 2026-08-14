@@ -14,10 +14,17 @@ router = APIRouter()
 
 @router.get("")
 async def list_past_due(db: AsyncSession = Depends(get_db)):
+    opportunity_id = (
+        select(Opportunity.id)
+        .where(Opportunity.tender_id == Tender.id)
+        .order_by(Opportunity.created_at.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
     result = await db.execute(
-        select(PastDueQueue, Tender, Opportunity.id.label("opportunity_id"))
+        select(PastDueQueue, Tender, opportunity_id.label("opportunity_id"))
         .join(Tender, PastDueQueue.tender_id == Tender.id)
-        .outerjoin(Opportunity, Opportunity.tender_id == Tender.id)
+        .where(PastDueQueue.resolution == "pending")
         .order_by(PastDueQueue.entered_queue_at.desc())
     )
     return {"items": [

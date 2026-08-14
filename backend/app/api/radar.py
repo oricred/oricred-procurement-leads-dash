@@ -1,13 +1,14 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select, func
+from sqlalchemy import exists, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.award import Award
 from app.models.past_due import PastDueQueue
 from app.models.tender import Tender
+from app.models.opportunity import Opportunity
 from app.schemas.radar import RadarAward, RadarData
 
 router = APIRouter()
@@ -18,7 +19,11 @@ async def get_radar(db: AsyncSession = Depends(get_db)):
     seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
 
     result = await db.execute(
-        select(Award, Tender)
+        select(
+            Award,
+            Tender,
+            exists().where(Opportunity.award_id == Award.id).label("has_opportunity"),
+        )
         .join(Tender, Award.tender_id == Tender.id)
         .where(Award.discovered_at >= seven_days_ago)
         .order_by(Award.discovered_at.desc())
@@ -27,7 +32,7 @@ async def get_radar(db: AsyncSession = Depends(get_db)):
     rows = result.all()
 
     awards = []
-    for award, tender in rows:
+    for award, tender, has_opportunity in rows:
         awards.append(RadarAward(
             id=str(award.id),
             tender_title=tender.title,
@@ -35,10 +40,14 @@ async def get_radar(db: AsyncSession = Depends(get_db)):
             amount=award.amount,
             award_date=award.award_date,
             buyer_org=tender.buyer_org_id,
-            passed_filter=True,
+            passed_filter=bool(has_opportunity),
         ))
 
-    count_result = await db.execute(select(func.count()).select_from(PastDueQueue))
+    count_result = await db.execute(
+        select(func.count())
+        .select_from(PastDueQueue)
+        .where(PastDueQueue.resolution == "pending")
+    )
     past_due_count = count_result.scalar() or 0
 
     return RadarData(awards=awards, past_due_count=past_due_count)

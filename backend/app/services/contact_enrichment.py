@@ -88,7 +88,7 @@ async def _upsert_contact(
 
             result = await db.execute(
                 select(Contact)
-                .where(*entity_filters, Contact.email == "")
+                .where(*entity_filters, or_(Contact.email == "", Contact.email.is_(None)))
                 .limit(1)
             )
             existing_without_email = result.scalars().first()
@@ -117,7 +117,7 @@ async def _upsert_contact(
             first_name=first_name,
             last_name=last_name,
             job_title=job_title,
-            email=email or "",
+            email=email or None,
             phone_direct=phone,
             phone_mobile=None,
             source=source,

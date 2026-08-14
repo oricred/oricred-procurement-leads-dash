@@ -10,7 +10,11 @@ from app.jobs.award_check import check_awards_for_watching, fix_corrupted_award_
 from app.jobs.contact_enrichment import run_contact_enrichment
 from app.jobs.crm_sync import sync_crm
 from app.jobs.discovery import discover_new_tenders
-from app.jobs.historical_backfill import backfill_historical_awards, backfill_historical_tenders
+from app.jobs.historical_backfill import (
+    backfill_historical_awards,
+    backfill_historical_tenders,
+    requalify_existing_award_leads,
+)
 from app.jobs.historical_contacts import sync_historical_contacts_job
 from app.jobs.model_refresh import refresh_timing_model
 from app.models.job_run import JobRun
@@ -30,6 +34,7 @@ JOB_HANDLERS: dict[str, tuple[str, JobHandler]] = {
     "fix_corrupted_award_dates": ("Fix corrupted award dates", fix_corrupted_award_dates),
     "backfill_historical_awards": ("Backfill all historical awards", backfill_historical_awards),
     "backfill_historical_tenders": ("Backfill historical tender stubs", backfill_historical_tenders),
+    "requalify_award_leads": ("Requalify existing award leads", requalify_existing_award_leads),
 }
 
 

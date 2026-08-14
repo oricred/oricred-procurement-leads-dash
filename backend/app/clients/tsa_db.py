@@ -27,6 +27,7 @@ TENDER_FIELD_MAP: dict[str, str] = {
     "publication_date": "t.publication_date",
     "source_organization": "t.source_organization",
     "source_organization_id": "t.source_organization_id",
+    "organization_type": "o.organization_type",
     "tender_type": "t.type",
     "published_at": "t.publication_date",
     "buyer_org_id": "t.source_organization_id",
@@ -45,7 +46,9 @@ AWARD_FIELD_MAP: dict[str, str] = {
     "amount": "a.amount",
     "award_date": "a.award_date",
     "created_at": "a.created_at",
-    "publication_date": "a.publication_date",
+    # The column is absent in older TSA deployments. Converting the whole row
+    # to JSON safely returns NULL when the key does not exist.
+    "publication_date": "NULLIF(to_jsonb(a)->>'publication_date', '')",
     "bee_level": "a.bee_level",
     "bee_points": "a.bee_points",
     "status": "a.status",
@@ -180,7 +183,7 @@ def _build_tender_where(filters: dict[str, Any] | None) -> tuple[str, dict[str, 
 
     since = filters.get("since")
     if since:
-        clauses.append("t.publication_date >= :since OR t.created_at >= :since")
+        clauses.append("(t.publication_date >= :since OR t.created_at >= :since)")
         params["since"] = since
 
     until = filters.get("until")
@@ -258,6 +261,19 @@ def _build_award_where(filters: dict[str, Any] | None) -> tuple[str, dict[str, A
     if since:
         clauses.append("a.award_date >= :since")
         params["since"] = since
+
+    created_since = filters.get("created_since")
+    if created_since:
+        clauses.append("a.created_at >= :created_since")
+        params["created_since"] = created_since
+
+    if filters.get("created_is_null"):
+        clauses.append("a.created_at IS NULL")
+
+    legacy_after_id = filters.get("legacy_after_id")
+    if legacy_after_id:
+        clauses.append("CAST(a.id AS TEXT) > :legacy_after_id")
+        params["legacy_after_id"] = str(legacy_after_id)
 
     until = filters.get("until") or filters.get("before")
     if until:
@@ -515,13 +531,20 @@ class TSADatabase:
         where, params, join_clause = _build_award_where(filters)
         params["limit"] = limit
         params["offset"] = max(offset, 0)
+        order_direction = "ASC" if direction.lower() == "asc" else "DESC"
+        if filters and filters.get("created_is_null"):
+            order_clause = f"CAST(a.id AS TEXT) {order_direction}"
+        elif filters and filters.get("created_since"):
+            order_clause = f"a.created_at {order_direction} NULLS LAST, a.id"
+        else:
+            order_clause = f"a.award_date {order_direction} NULLS LAST, a.id"
 
         sql = f"""
             SELECT {select_cols}
             FROM tender_awards a
             {join_clause}
             {where}
-            ORDER BY a.award_date {"ASC" if direction.lower() == "asc" else "DESC"} NULLS LAST
+            ORDER BY {order_clause}
             LIMIT :limit OFFSET :offset
         """
         async with self._session_factory() as session:

@@ -36,7 +36,11 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     )
     watching = watch_result.scalar() or 0
 
-    pd_result = await db.execute(select(func.count()).select_from(PastDueQueue))
+    pd_result = await db.execute(
+        select(func.count())
+        .select_from(PastDueQueue)
+        .where(PastDueQueue.resolution == "pending")
+    )
     past_due = pd_result.scalar() or 0
 
     return DashboardStats(stages=stages, total_opportunities=total, total_watching=watching, past_due_count=past_due)
