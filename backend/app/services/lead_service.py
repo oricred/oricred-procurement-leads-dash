@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.clients.tsa_db import TSADatabase
 from app.database import async_session
 from app.models.opportunity import Opportunity, OpportunityAudit
+from app.models.contact import Contact
+from app.models.tender import Tender
 from app.services.contact_enrichment import enrich_company_contacts_by_id
 from app.services.lead_scoring import refresh_lead_scoring
 from app.workflow import WORKFLOW_STAGES
@@ -91,6 +93,20 @@ async def mark_opportunity_contacted(
 
     if opp.kanban_stage != "new_lead":
         raise RuntimeError("Only a new lead can be marked contacted")
+
+    if contact_id:
+        contact = await db.get(Contact, contact_id)
+        if not contact:
+            raise ValueError("Contact not found")
+        buyer_org_id = None
+        if opp.tender_id:
+            tender = await db.get(Tender, opp.tender_id)
+            buyer_org_id = tender.buyer_org_id if tender else None
+        if not (
+            (opp.company_id and contact.company_id == opp.company_id)
+            or (buyer_org_id and contact.organization_id == buyer_org_id)
+        ):
+            raise ValueError("Contact is not associated with this opportunity")
 
     old_stage = opp.kanban_stage
     opp.kanban_stage = "client_contacted"

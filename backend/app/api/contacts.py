@@ -9,8 +9,21 @@ from app.models.organization import Organization
 from app.models.opportunity import Opportunity
 from app.models.tender import Tender
 from app.schemas.contact import ContactRead, ContactCreate, ContactUpdate
+from app.services.lead_scoring import refresh_lead_scoring
 
 router = APIRouter()
+
+
+async def _refresh_company_opportunities(company_id: str | None, db: AsyncSession) -> None:
+    if not company_id:
+        return
+    opportunities = (
+        (await db.execute(select(Opportunity).where(Opportunity.company_id == company_id)))
+        .scalars()
+        .all()
+    )
+    for opportunity in opportunities:
+        await refresh_lead_scoring(opportunity, db)
 
 
 async def _get_contact(contact_id: str, db: AsyncSession) -> Contact:
@@ -50,6 +63,8 @@ async def create_company_contact(company_id: str, body: ContactCreate, db: Async
     if contact.is_primary:
         await _clear_primary_company_contacts(company_id, db)
     db.add(contact)
+    await db.flush()
+    await _refresh_company_opportunities(company_id, db)
     await db.commit()
     await db.refresh(contact)
     return contact
@@ -122,6 +137,8 @@ async def update_contact(contact_id: str, body: ContactUpdate, db: AsyncSession 
     if body.notes is not None:
         contact.notes = body.notes
 
+    await db.flush()
+    await _refresh_company_opportunities(contact.company_id, db)
     await db.commit()
     await db.refresh(contact)
     return contact
@@ -130,7 +147,10 @@ async def update_contact(contact_id: str, body: ContactUpdate, db: AsyncSession 
 @router.delete("/contacts/{contact_id}", status_code=204)
 async def delete_contact(contact_id: str, db: AsyncSession = Depends(get_db)):
     contact = await _get_contact(contact_id, db)
+    company_id = contact.company_id
     await db.delete(contact)
+    await db.flush()
+    await _refresh_company_opportunities(company_id, db)
     await db.commit()
 
 

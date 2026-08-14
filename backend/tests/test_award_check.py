@@ -24,9 +24,9 @@ class TestResolveAwardDate:
         )
         assert r == _dt(2025, 10, 9)
 
-    def test_corrupt_raw_without_context_falls_to_discovered(self):
+    def test_corrupt_raw_without_context_uses_prior_discovery_year(self):
         r = _resolve_award_date("2099-10-09", None, DISCOVERED, NOW)
-        assert r == DISCOVERED
+        assert r == _dt(2025, 10, 9)
 
     def test_null_raw_date_uses_publication_not_source_created(self):
         r = _resolve_award_date(
@@ -38,6 +38,14 @@ class TestResolveAwardDate:
     def test_null_raw_no_source_falls_to_discovered(self):
         r = _resolve_award_date(None, None, DISCOVERED, NOW)
         assert r == DISCOVERED
+
+    def test_null_raw_does_not_use_tender_publication_before_closing(self):
+        r = _resolve_award_date(
+            None, None, DISCOVERED, NOW,
+            tender_published_at="2025-01-01",
+            tender_closing_date="2025-03-01",
+        )
+        assert r == _dt(2025, 3, 1)
 
     def test_discovered_in_future_uses_now(self):
         r = _resolve_award_date(None, None, _dt(2099, 1, 1), NOW)

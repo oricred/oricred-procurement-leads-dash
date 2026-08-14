@@ -146,7 +146,7 @@ def _resolve_award_date(
     # Source created_at is intentionally not used as an award date: it is an
     # ingestion cursor, not a procurement event. Prefer business-date proxies.
     for proxy in (publication, tender_published, tender_closing, discovered):
-        if proxy is not None and proxy <= discovered and proxy <= resolved_now:
+        if proxy is not None and valid(proxy) and proxy <= resolved_now:
             return proxy
     return resolved_now
 
@@ -208,7 +208,7 @@ async def _upsert_tender_for_award(db, raw: dict, metadata: dict | None, now: da
             closing_date=parse_datetime(metadata.get("closing_date")),
             buyer_org_id=buyer_org_id,
             tender_type=metadata.get("type"),
-            published_at=metadata.get("publication_date"),
+            published_at=parse_datetime(metadata.get("publication_date")),
             discovered_at=now,
         )
         db.add(tender)

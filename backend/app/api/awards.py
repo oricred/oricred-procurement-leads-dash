@@ -19,6 +19,8 @@ from app.models.category import Category
 from app.schemas.award import AwardItem, AwardsList
 from app.schemas.opportunity import OpportunityRead
 from app.services.lead_scoring import refresh_lead_scoring
+from app.services.buyer_preference import compute_buyer_preference
+from app.services.funding_suitability import compute_funding_suitability
 
 router = APIRouter()
 
@@ -174,7 +176,12 @@ async def create_lead_from_award(award_id: str, db: AsyncSession = Depends(get_d
     )
     db.add(opp)
     await db.flush()
-    await refresh_lead_scoring(opp, db, award=award, company=company, contacts=[])
+    tender = await db.get(Tender, award.tender_id) if award.tender_id else None
+    opp.buyer_preference_score = await compute_buyer_preference(str(opp.id), db)
+    opp.funding_suitability = await compute_funding_suitability(company.id, db)
+    await refresh_lead_scoring(
+        opp, db, tender=tender, award=award, company=company, contacts=[],
+    )
     await db.commit()
     await db.refresh(opp)
     from app.api.opportunities import _read_opportunity_with_context

@@ -19,6 +19,7 @@ from app.models.tender import Tender
 from app.services.buyer_preference import compute_buyer_preference
 from app.services.funding_suitability import compute_funding_suitability
 from app.services.lead_scoring import refresh_lead_scoring
+from app.services.qualification import QualificationService
 from app.workflow import WORKFLOW_STAGES
 
 from app.jobs.award_check import (
@@ -229,6 +230,9 @@ async def _process_award_chunk(
         award.source_created_at = parse_datetime(raw.get("created_at"))
         award.award_date = _resolve_award_date(
             raw.get("award_date"), award.source_created_at, award.discovered_at, now,
+            publication_date=award.publication_date,
+            tender_published_at=tender.published_at,
+            tender_closing_date=tender.closing_date,
         )
         award.bee_level = raw.get("bee_level")
         award.bee_points = raw.get("bee_points")
@@ -236,6 +240,18 @@ async def _process_award_chunk(
 
         existing_opp = await db.execute(select(Opportunity).where(Opportunity.award_id == award.id))
         if existing_opp.scalar_one_or_none():
+            continue
+
+        qualification = await QualificationService(db).evaluate_award_lead(
+            tender, award, company,
+        )
+        if not qualification.passed:
+            logger.info(
+                "historical_award_lead_rejected",
+                award_id=award.api_id,
+                filter=qualification.failed_filter,
+                reason=qualification.reason,
+            )
             continue
 
         opp = Opportunity(
