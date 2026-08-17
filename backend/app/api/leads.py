@@ -14,21 +14,35 @@ from app.models.opportunity import Opportunity
 from app.models.tender import Tender
 from app.schemas.opportunity import OpportunityList
 from app.services.lead_contact_import import apply_import, parse_import_file, preview_import
-from app.workflow import LEGACY_STAGE_MAP, normalize_stage
+from app.workflow import LEGACY_STAGE_MAP, is_workflow_stage, normalize_stage
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
+LEAD_SORTS = ("priority", "newest")
+LEAD_SORT_DEFAULT = "priority"
+
+
+def _validate_lead_filters(stage: str | None, sort: str) -> None:
+    """Reject unknown values instead of silently returning an empty inbox."""
+    if stage and not is_workflow_stage(stage):
+        raise HTTPException(status_code=400, detail="Invalid lead stage")
+    if sort not in LEAD_SORTS:
+        raise HTTPException(status_code=400, detail=f"Sort must be one of {', '.join(LEAD_SORTS)}")
 
 
 async def _build_leads_query(
     stage=None, assigned_to=None, contactability=None, priority_min=None,
     province=None, buyer_org_id=None, category=None, risk_flag=None,
     next_action=None, value_min=None, award_recency_days=None, search=None,
+    sort=LEAD_SORT_DEFAULT,
 ):
+    # Award and tender are joined for context and filtering only. None of the
+    # link columns carry a foreign key, so an inner join would silently drop a
+    # lead whose tender row is missing — award_id is what defines the inbox.
     q = (
         select(Opportunity)
-        .join(Award, Opportunity.award_id == Award.id)
-        .join(Tender, Opportunity.tender_id == Tender.id)
+        .outerjoin(Award, Opportunity.award_id == Award.id)
+        .outerjoin(Tender, Opportunity.tender_id == Tender.id)
         .where(Opportunity.award_id.isnot(None))
     )
     if stage:
@@ -68,11 +82,18 @@ async def _build_leads_query(
         q = q.where(Tender.buyer_org_id == buyer_org_id)
     if category:
         q = q.where(Tender.category_id == category)
-    q = q.order_by(
-        Opportunity.lead_priority_score.desc().nulls_last(),
-        Award.award_date.desc().nulls_last(),
-        Opportunity.created_at.desc(),
-    )
+    if sort == "newest":
+        # A freshly converted award has no score yet; priority order buries it.
+        q = q.order_by(
+            Opportunity.created_at.desc(),
+            Opportunity.lead_priority_score.desc().nulls_last(),
+        )
+    else:
+        q = q.order_by(
+            Opportunity.lead_priority_score.desc().nulls_last(),
+            Award.award_date.desc().nulls_last(),
+            Opportunity.created_at.desc(),
+        )
     return q
 
 
@@ -81,12 +102,12 @@ async def _fetch_leads(
     stage=None, assigned_to=None, contactability=None, priority_min=None,
     province=None, buyer_org_id=None, category=None, risk_flag=None,
     next_action=None, value_min=None, award_recency_days=None, search=None,
-    limit: int | None = None, offset: int = 0,
+    sort=LEAD_SORT_DEFAULT, limit: int | None = None, offset: int = 0,
 ):
     q = await _build_leads_query(
         stage, assigned_to, contactability, priority_min, province,
         buyer_org_id, category, risk_flag, next_action, value_min,
-        award_recency_days, search,
+        award_recency_days, search, sort,
     )
 
     count_q = select(func.count()).select_from(q.subquery())
@@ -118,14 +139,16 @@ async def list_leads(
     value_min: float | None = Query(None),
     award_recency_days: int | None = Query(None, ge=1),
     search: str | None = Query(None),
+    sort: str = Query(LEAD_SORT_DEFAULT),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
+    _validate_lead_filters(stage, sort)
     return await _fetch_leads(
         db, stage, assigned_to, contactability, priority_min, province,
         buyer_org_id, category, risk_flag, next_action, value_min,
-        award_recency_days, search, limit=limit, offset=offset,
+        award_recency_days, search, sort, limit=limit, offset=offset,
     )
 
 
@@ -143,13 +166,15 @@ async def export_leads(
     value_min: float | None = Query(None),
     award_recency_days: int | None = Query(None, ge=1),
     search: str | None = Query(None),
+    sort: str = Query(LEAD_SORT_DEFAULT),
     db: AsyncSession = Depends(get_db),
 ):
     """Export every lead matching the supplied inbox filters as CSV."""
+    _validate_lead_filters(stage, sort)
     leads = await _fetch_leads(
         db, stage, assigned_to, contactability, priority_min, province,
         buyer_org_id, category, risk_flag, next_action, value_min,
-        award_recency_days, search, limit=None,
+        award_recency_days, search, sort, limit=None,
     )
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)

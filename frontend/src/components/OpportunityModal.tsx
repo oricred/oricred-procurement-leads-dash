@@ -160,7 +160,8 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
         setShowManualGuidance(true);
       }
       queryClient.invalidateQueries({ queryKey: ['leads'] });
-      queryClient.invalidateQueries({ queryKey: ['opportunities', opp.id] });
+      queryClient.invalidateQueries({ queryKey: ['opportunity', opp.id] });
+      queryClient.invalidateQueries({ queryKey: ['opportunities'] });
       setTimeout(() => setFindContactFeedback(null), 6000);
     },
     onError: () => {

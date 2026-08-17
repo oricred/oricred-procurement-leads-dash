@@ -10,6 +10,7 @@ from app.models.company import Company
 from app.models.contact import Contact
 from app.models.opportunity import Opportunity
 from app.models.tender import Tender
+from app.utils import as_utc
 
 TARGET_MIN_AWARD = Decimal("500000")
 TARGET_MAX_AWARD = Decimal("20000000")
@@ -85,8 +86,9 @@ async def compute_lead_priority(
     else:
         reasons.append("No supplier contact")
 
-    if award and award.award_date:
-        days_since = (datetime.now(timezone.utc) - award.award_date).days
+    award_date = as_utc(award.award_date) if award else None
+    if award_date:
+        days_since = (datetime.now(timezone.utc) - award_date).days
         if days_since <= 7:
             score += 20
             reasons.append("Awarded this week")

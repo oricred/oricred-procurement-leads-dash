@@ -20,7 +20,7 @@ from app.services.buyer_preference import compute_buyer_preference
 from app.services.funding_suitability import compute_funding_suitability
 from app.services.lead_scoring import refresh_lead_scoring
 from app.services.qualification import QualificationService
-from app.workflow import WORKFLOW_STAGES
+from app.workflow import WORKFLOW_STAGES, normalize_stage
 
 from app.jobs.award_check import (
     _award_api_id,
@@ -79,7 +79,7 @@ async def requalify_existing_award_leads(db=None) -> dict[str, int]:
 
         reason = qualification.reason or qualification.failed_filter or "Current qualification failed"
         untouched = (
-            opportunity.kanban_stage == "new_lead"
+            normalize_stage(opportunity.kanban_stage) == "new_lead"
             and opportunity.assigned_to is None
             and opportunity.contacted_at is None
             and not opportunity.notes
@@ -88,13 +88,14 @@ async def requalify_existing_award_leads(db=None) -> dict[str, int]:
         opportunity.version += 1
         opportunity.updated_at = now
         if untouched:
+            from_stage = opportunity.kanban_stage
             opportunity.kanban_stage = "lost_lead"
             opportunity.lost_reason = f"Automatic requalification: {reason}"
             opportunity.closed_at = now
             opportunity.next_action = None
             db.add(OpportunityAudit(
                 opportunity_id=opportunity.id,
-                from_stage="new_lead",
+                from_stage=from_stage,
                 to_stage="lost_lead",
                 changed_by="system:requalification",
             ))
