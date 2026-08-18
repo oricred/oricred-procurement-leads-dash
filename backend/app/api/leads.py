@@ -10,8 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.opportunities import _batch_load_opportunity_context, _opportunity_to_read
 from app.database import get_db
 from app.models.award import Award
+from app.models.category import Category
+from app.models.company import Company
 from app.models.opportunity import Opportunity
+from app.models.organization import Organization
 from app.models.tender import Tender
+from app.models.user import User
 from app.schemas.opportunity import OpportunityList
 from app.services.lead_contact_import import apply_import, parse_import_file, preview_import
 from app.workflow import LEGACY_STAGE_MAP, is_workflow_stage, normalize_stage
@@ -43,6 +47,9 @@ async def _build_leads_query(
         select(Opportunity)
         .outerjoin(Award, Opportunity.award_id == Award.id)
         .outerjoin(Tender, Opportunity.tender_id == Tender.id)
+        .outerjoin(Company, Opportunity.company_id == Company.id)
+        .outerjoin(Organization, Tender.buyer_org_id == Organization.id)
+        .outerjoin(Category, Tender.category_id == Category.id)
         .where(Opportunity.award_id.isnot(None))
     )
     if stage:
@@ -70,10 +77,23 @@ async def _build_leads_query(
             Award.award_date >= datetime.now(timezone.utc) - timedelta(days=award_recency_days)
         )
     if search:
+        # Match every field the inbox displays. Opportunity.assigned_to holds a
+        # user UUID, not a name, so the owner is matched through User instead.
+        pattern = f"%{search}%"
         q = q.where(
             or_(
-                Award.supplier_name.ilike(f"%{search}%"),
-                Opportunity.assigned_to.ilike(f"%{search}%"),
+                Award.supplier_name.ilike(pattern),
+                Company.name.ilike(pattern),
+                Tender.title.ilike(pattern),
+                Tender.province.ilike(pattern),
+                Tender.category_id.ilike(pattern),
+                Category.name.ilike(pattern),
+                Organization.name.ilike(pattern),
+                Opportunity.assigned_to.in_(
+                    select(User.id).where(
+                        or_(User.name.ilike(pattern), User.email.ilike(pattern))
+                    )
+                ),
             )
         )
     if province:

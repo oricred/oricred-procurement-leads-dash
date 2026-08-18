@@ -14,9 +14,13 @@ async def compute_relationship(
     company_id: str,
     organization_id: str,
     db: AsyncSession,
-) -> BuyerRelationship:
+) -> BuyerRelationship | None:
     cutoff = datetime.now(timezone.utc) - timedelta(days=365)
     company = await db.get(Company, company_id)
+    if company is None:
+        # company_id carries no foreign key, so it can dangle. Computing anyway
+        # would cache an all-zero relationship that reads as a real verdict.
+        return None
 
     award_counts = await db.execute(
         select(
@@ -26,7 +30,7 @@ async def compute_relationship(
         .select_from(Award)
         .join(Tender, Tender.id == Award.tender_id)
         .where(Tender.buyer_org_id == organization_id)
-        .where(Award.supplier_company_id == (company.api_id if company else ""))
+        .where(Award.supplier_company_id == company.api_id)
         .where(Award.award_date >= cutoff)
     )
     award_count, total_value = award_counts.one()

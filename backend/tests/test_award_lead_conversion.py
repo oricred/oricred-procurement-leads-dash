@@ -23,6 +23,7 @@ from app.models.company import Company
 from app.models.opportunity import Opportunity, OpportunityAudit
 from app.models.organization import Organization
 from app.models.tender import Tender
+from app.models.user import User
 
 NOW = datetime(2026, 8, 17, tzinfo=timezone.utc)
 
@@ -198,6 +199,38 @@ async def test_lead_is_still_listed_when_its_tender_row_is_missing(journey):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("term", ["Bopape", "Cape Town", "Bulk water", "wc"])
+async def test_inbox_search_covers_every_field_the_row_displays(journey, term):
+    client, sessions = journey
+    await _seed_award(sessions)
+    client.post("/api/awards/aw-1/lead")
+
+    body = client.get("/api/leads", params={"stage": "new_lead", "search": term}).json()
+
+    assert body["total"] == 1, f"search {term!r} found nothing"
+
+
+@pytest.mark.asyncio
+async def test_inbox_search_matches_the_owner_by_name_not_by_uuid(journey):
+    client, sessions = journey
+    await _seed_award(sessions)
+    lead = client.post("/api/awards/aw-1/lead").json()
+    async with sessions() as db:
+        # assigned_to stores a user id, so a name search has to resolve through User.
+        user = User(
+            id="u-1", email="sarah@oricred.com", name="Sarah Nkosi",
+            hashed_password="x", role="analyst", is_active=True,
+        )
+        db.add(user)
+        opp = await db.get(Opportunity, lead["id"])
+        opp.assigned_to = "u-1"
+        await db.commit()
+
+    assert client.get("/api/leads", params={"search": "Sarah"}).json()["total"] == 1
+    assert client.get("/api/leads", params={"search": "Nonexistent"}).json()["total"] == 0
+
+
+@pytest.mark.asyncio
 async def test_inbox_rejects_an_unknown_stage_instead_of_returning_nothing(journey):
     client, _ = journey
 
@@ -308,6 +341,40 @@ async def test_an_already_promoted_lead_cannot_be_promoted_again(journey):
 
     assert response.status_code == 409
     assert "new lead" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_requalification_leaves_settled_deals_alone(journey, monkeypatch):
+    """A funded deal must not be re-flagged red when the filters later tighten."""
+    from app.jobs.historical_backfill import requalify_existing_award_leads
+    from app.services.qualification import FilterResult, QualificationService
+
+    async def reject(self, tender, award, company):
+        return FilterResult(False, "value_range", "Below minimum")
+
+    monkeypatch.setattr(QualificationService, "evaluate_award_lead", reject)
+    _, sessions = journey
+    await _seed_award(sessions)
+    async with sessions() as db:
+        db.add(Opportunity(
+            id="op-funded", award_id="aw-1", tender_id="T-1", company_id="c-1",
+            kanban_stage="funded", risk_flag="green", next_action=None,
+            lead_origin="automatic", version=17,
+        ))
+        await db.commit()
+
+    async with sessions() as db:
+        result = await requalify_existing_award_leads(db)
+        await db.commit()
+
+    assert result["skipped"] == 1
+    assert result["closed"] == 0
+    async with sessions() as db:
+        funded = await db.get(Opportunity, "op-funded")
+        assert funded.kanban_stage == "funded"
+        assert funded.risk_flag == "green"
+        assert funded.next_action is None
+        assert funded.version == 17
 
 
 @pytest.mark.asyncio

@@ -107,7 +107,7 @@ async def test_existing_automatic_leads_are_requalified_but_manual_overrides_are
         result = await requalify_existing_award_leads(db)
         await db.commit()
 
-        assert result == {"checked": 1, "passed": 0, "closed": 1, "flagged": 0}
+        assert result == {"checked": 1, "passed": 0, "closed": 1, "flagged": 0, "skipped": 0}
         assert automatic.kanban_stage == "lost_lead"
         assert automatic.lost_reason.startswith("Automatic requalification:")
         assert manual.kanban_stage == "new_lead"

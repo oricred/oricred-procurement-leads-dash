@@ -17,7 +17,7 @@ const date = (v: string | null) => v ? new Date(v).toLocaleDateString('en-ZA') :
 const activeFilters = (filters: Record<string, string>) =>
   Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== ''));
 
-type Banner = { tone: 'success' | 'error'; message: string; leadId?: string };
+type Banner = { tone: 'success' | 'error'; message: string; leadId?: string; inInbox?: boolean };
 
 export default function AwardsPage() {
   const [params, setParams] = useSearchParams();
@@ -63,6 +63,8 @@ export default function AwardsPage() {
           ? `${lead.company_name ?? 'Supplier'} added to the Lead Inbox.`
           : `${lead.company_name ?? 'This award'} is already a lead.`,
         leadId: lead.id,
+        // A pre-existing lead may already have moved on; the inbox only shows new_lead.
+        inInbox: lead.kanban_stage === 'new_lead',
       });
     },
     onError: (error) => {
@@ -111,7 +113,9 @@ export default function AwardsPage() {
     <div className="flex flex-wrap items-center gap-3 mb-4"><Award className="w-5 h-5 text-primary-400" /><div><h2 className="text-lg font-semibold text-white">Award intelligence</h2><p className="text-xs text-gray-500">Create outreach-ready leads from awarded suppliers.</p></div><span className="text-xs text-gray-500">{data?.total ?? 0} results</span><div className="ml-auto"><HelpLink section="discover" /></div><button onClick={toggleSort} className="text-xs text-gray-400 hover:text-white">Sort award date {direction === 'desc' ? '↓' : '↑'}</button><button onClick={exportCsv} className="inline-flex gap-1 text-xs text-primary-400"><Download className="w-4 h-4" />CSV</button></div>
     {banner && <div className={`mb-3 flex items-center gap-3 rounded px-3 py-2 text-sm ${banner.tone === 'success' ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>
       <span>{banner.message}</span>
-      {banner.leadId && <Link to="/leads" className="font-medium underline underline-offset-2 hover:text-white">View in Lead Inbox</Link>}
+      {banner.leadId && (banner.inInbox
+        ? <Link to="/leads" className="font-medium underline underline-offset-2 hover:text-white">View in Lead Inbox</Link>
+        : <Link to={`/pipeline?open=${banner.leadId}`} className="font-medium underline underline-offset-2 hover:text-white">Open in Deal Pipeline</Link>)}
       <button onClick={() => setBanner(null)} className="ml-auto text-current opacity-60 hover:opacity-100" aria-label="Dismiss"><X className="h-4 w-4" /></button>
     </div>}
     <FilterBar fields={fields} values={filters} onChange={(k, v) => { setFilters(f => ({ ...f, [k]: v })); setPage(1); }} onClear={() => { setFilters({}); setPage(1); }} />
