@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, Mail, Phone, Search, UserRound, RefreshCcw, ArrowRightCircle, Download } from 'lucide-react';
-import { leads } from '../services/api';
+import { useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, Mail, Phone, Search, UserRound, RefreshCcw, ArrowRightCircle, Download, Loader2, Send, X } from 'lucide-react';
+import { leads, opportunities } from '../services/api';
 import type { Opportunity } from '../types';
 import OpportunityModal from '../components/OpportunityModal';
 import HelpLink from '../components/HelpLink';
@@ -29,17 +30,29 @@ export default function LeadsPage() {
   const queryClient = useQueryClient();
   const [selectedOpp, setSelectedOpp] = useState<Opportunity | null>(null);
   const [query, setQuery] = useState('');
+  const [search, setSearch] = useState('');
   const [contactability, setContactability] = useState('');
+  const [sort, setSort] = useState('priority');
   const [isExporting, setIsExporting] = useState(false);
+  const [banner, setBanner] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
   const [page, setPage] = useState(1);
   const pageSize = 50;
 
+  // Search runs server-side so the result set and the CSV export agree; debounce
+  // so each keystroke does not fire a request.
+  useEffect(() => {
+    const timer = setTimeout(() => { setSearch(query.trim()); setPage(1); }, 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ['leads', contactability, page],
+    queryKey: ['leads', contactability, sort, search, page],
     queryFn: async () => {
       const res = await leads.list({
         stage: 'new_lead',
         contactability: contactability || undefined,
+        search: search || undefined,
+        sort,
         limit: pageSize,
         offset: (page - 1) * pageSize,
       });
@@ -49,16 +62,21 @@ export default function LeadsPage() {
   });
 
   const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / pageSize));
+  const items = data?.items ?? [];
 
-  const items = useMemo(() => {
-    const all = data?.items ?? [];
-    const needle = query.trim().toLowerCase();
-    if (!needle) return all;
-    return all.filter((opp) =>
-      [opp.company_name, opp.buyer_org, opp.source_tender_title, opp.province, opp.category, opp.category_name]
-        .some((value) => (value ?? '').toLowerCase().includes(needle)),
-    );
-  }, [data?.items, query]);
+  const promote = useMutation({
+    mutationFn: (opp: Opportunity) => opportunities.markContacted(opp.id, { version: opp.version }),
+    onSuccess: (_res, opp) => {
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      queryClient.invalidateQueries({ queryKey: ['opportunities'] });
+      setBanner({ tone: 'success', message: `${opp.company_name ?? 'Lead'} moved to the deal pipeline.` });
+    },
+    onError: (error) => {
+      const detail = (error as { response?: { data?: { detail?: string } }; message?: string })
+        .response?.data?.detail ?? (error as { message?: string }).message;
+      setBanner({ tone: 'error', message: detail ?? 'Could not move this lead to the pipeline.' });
+    },
+  });
 
   const exportCsv = async () => {
     setIsExporting(true);
@@ -66,7 +84,8 @@ export default function LeadsPage() {
       const response = await leads.export({
         stage: 'new_lead',
         contactability: contactability || undefined,
-        search: query.trim() || undefined,
+        search: search || undefined,
+        sort,
       });
       const url = URL.createObjectURL(response.data);
       const link = document.createElement('a');
@@ -104,6 +123,15 @@ export default function LeadsPage() {
             <option value="contactable">Contactable</option>
             <option value="needs_contact">Needs contact</option>
           </select>
+          <select
+            value={sort}
+            onChange={(e) => { setSort(e.target.value); setPage(1); }}
+            className="bg-surface-200 border border-surface-300 rounded px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-primary-500"
+            aria-label="Sort leads"
+          >
+            <option value="priority">Highest priority</option>
+            <option value="newest">Newest first</option>
+          </select>
           <LeadContactImport onImported={() => void queryClient.invalidateQueries({ queryKey: ['leads'] })} />
           <button
             onClick={exportCsv}
@@ -116,6 +144,12 @@ export default function LeadsPage() {
         </div>
       </div>
 
+      {banner && <div className={`mb-3 flex items-center gap-3 rounded px-3 py-2 text-sm ${banner.tone === 'success' ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>
+        <span>{banner.message}</span>
+        {banner.tone === 'success' && <Link to="/pipeline" className="font-medium underline underline-offset-2 hover:text-white">Open Deal Pipeline</Link>}
+        <button onClick={() => setBanner(null)} className="ml-auto text-current opacity-60 hover:opacity-100" aria-label="Dismiss"><X className="h-4 w-4" /></button>
+      </div>}
+
       <div className="overflow-auto border border-surface-300 rounded-lg bg-surface-200/50">
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-surface-200 border-b border-surface-300 text-xs uppercase text-gray-500">
@@ -125,13 +159,14 @@ export default function LeadsPage() {
               <th className="text-left px-4 py-3 font-medium">Award</th>
               <th className="text-left px-4 py-3 font-medium">Fit</th>
               <th className="text-left px-4 py-3 font-medium">Next</th>
+              <th className="text-left px-4 py-3 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-surface-300">
             {isLoading ? (
-              <tr><td colSpan={5} className="px-4 py-10 text-center text-gray-500">Loading leads...</td></tr>
+              <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-500">Loading leads...</td></tr>
             ) : items.length === 0 ? (
-              <tr><td colSpan={5} className="px-4 py-10 text-center text-gray-500">No new leads match the current filters.</td></tr>
+              <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-500">No new leads match the current filters.</td></tr>
             ) : items.map((opp) => {
               const contact = opp.primary_contact;
               return (
@@ -157,7 +192,7 @@ export default function LeadsPage() {
                         </div>
                       </div>
                     ) : (
-                      <button onClick={() => setSelectedOpp(opp)} className="inline-flex items-center gap-1.5 text-amber-300 text-xs hover:text-amber-200 transition-colors"><RefreshCcw className="w-3.5 h-3.5" />Find contact</button>
+                      <button onClick={(e) => { e.stopPropagation(); setSelectedOpp(opp); }} className="inline-flex items-center gap-1.5 text-amber-300 text-xs hover:text-amber-200 transition-colors"><RefreshCcw className="w-3.5 h-3.5" />Find contact</button>
                     )}
                   </td>
                   <td className="px-4 py-3 align-top">
@@ -176,6 +211,19 @@ export default function LeadsPage() {
                       <ArrowRightCircle className="w-3.5 h-3.5" />
                       {opp.next_action ?? 'Review lead'}
                     </div>
+                  </td>
+                  <td className="px-4 py-3 align-top">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); promote.mutate(opp); }}
+                      disabled={promote.isPending && promote.variables?.id === opp.id}
+                      title="Record first contact and move this lead into the deal pipeline"
+                      className="inline-flex items-center gap-1.5 whitespace-nowrap rounded bg-surface-300 px-2.5 py-1.5 text-xs text-primary-300 transition-colors hover:bg-primary-500/10 hover:text-primary-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {promote.isPending && promote.variables?.id === opp.id
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        : <Send className="w-3.5 h-3.5" />}
+                      Send to pipeline
+                    </button>
                   </td>
                 </tr>
               );

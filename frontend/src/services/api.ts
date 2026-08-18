@@ -4,6 +4,9 @@ import type { Opportunity, Stage, RadarData, WatchlistItem, DashboardStats, User
 const api = axios.create({
   baseURL: '/api',
   headers: { 'Content-Type': 'application/json' },
+  // FastAPI reads a repeated query param as a list; axios would otherwise emit
+  // `stage[]=…`, which it cannot parse.
+  paramsSerializer: { indexes: null },
 });
 
 api.interceptors.request.use((config) => {

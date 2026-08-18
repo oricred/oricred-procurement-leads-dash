@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models.opportunity import Opportunity
 from app.models.past_due import PastDueQueue
 from app.models.tender import Tender
+from app.utils import as_utc
 
 router = APIRouter()
 
@@ -34,7 +35,7 @@ async def list_past_due(db: AsyncSession = Depends(get_db)):
             "province": tender.province, "buyer_org": tender.buyer_org_id,
             "entered_queue_at": pdq.entered_queue_at.isoformat(),
             "poll_count_since_due": pdq.poll_count_since_due, "resolution": pdq.resolution or "pending",
-            "days_in_queue": (datetime.now(timezone.utc) - pdq.entered_queue_at).days,
+            "days_in_queue": (datetime.now(timezone.utc) - as_utc(pdq.entered_queue_at)).days,
             "opportunity_id": str(opportunity_id) if opportunity_id else None,
         }
         for pdq, tender, opportunity_id in result.all()

@@ -11,10 +11,22 @@ from app.models.contact import Contact
 from app.models.tender import Tender
 from app.services.contact_enrichment import enrich_company_contacts_by_id
 from app.services.lead_scoring import refresh_lead_scoring
-from app.workflow import WORKFLOW_STAGES
+from app.workflow import LEGACY_STAGE_MAP, WORKFLOW_STAGES, normalize_stage
 
 logger = structlog.get_logger()
 CONTACT_RETRY_COOLDOWN_HOURS = 6
+
+NEW_LEAD_STAGES = [WORKFLOW_STAGES[0]] + [
+    legacy for legacy, canonical in LEGACY_STAGE_MAP.items() if canonical == WORKFLOW_STAGES[0]
+]
+
+
+class VersionConflictError(RuntimeError):
+    """The caller's optimistic-locking token is stale."""
+
+
+class StageConflictError(RuntimeError):
+    """The opportunity is not in a stage that allows this action."""
 
 
 async def retry_contact_lookup_for_opportunity(
@@ -50,7 +62,7 @@ async def retry_new_lead_contact_lookups(limit: int = 50) -> int:
         async with async_session() as db:
             result = await db.execute(
                 select(Opportunity)
-                .where(Opportunity.kanban_stage == WORKFLOW_STAGES[0])
+                .where(Opportunity.kanban_stage.in_(NEW_LEAD_STAGES))
                 .where(Opportunity.company_id.isnot(None))
                 .where(or_(
                     Opportunity.contact_sufficiency.is_(None),
@@ -89,10 +101,12 @@ async def mark_opportunity_contacted(
     if not opp:
         raise ValueError("Opportunity not found")
     if opp.version != version:
-        raise RuntimeError("Version conflict: opportunity was modified")
+        raise VersionConflictError("Version conflict: opportunity was modified")
 
-    if opp.kanban_stage != "new_lead":
-        raise RuntimeError("Only a new lead can be marked contacted")
+    # Rows still holding a legacy stage value are displayed as new_lead, so they
+    # must be promotable as one.
+    if normalize_stage(opp.kanban_stage) != "new_lead":
+        raise StageConflictError("Only a new lead can be marked contacted")
 
     if contact_id:
         contact = await db.get(Contact, contact_id)

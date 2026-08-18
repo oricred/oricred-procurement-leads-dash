@@ -94,7 +94,7 @@ export default function WorkflowActions({ opportunity, onFindContact, findContac
         <button role="menuitem" onClick={() => runMenuAction(() => setDialog('reopen'))} disabled={pending} className={`${menuItemClass} text-primary-300 hover:bg-primary-500/10`}><RotateCcw className="h-3.5 w-3.5" />Reopen</button>
       ) : <>
         {opportunity.kanban_stage === 'new_lead' ? (
-          <button role="menuitem" onClick={() => runMenuAction(() => markContacted.mutate())} disabled={pending} className={`${menuItemClass} text-primary-300 hover:bg-primary-500/10`}><CheckCircle2 className="h-3.5 w-3.5" />Mark contacted</button>
+          <button role="menuitem" onClick={() => runMenuAction(() => markContacted.mutate())} disabled={pending} className={`${menuItemClass} text-primary-300 hover:bg-primary-500/10`}><CheckCircle2 className="h-3.5 w-3.5" />Mark contacted → pipeline</button>
         ) : (
           <button role="menuitem" onClick={() => runMenuAction(advance)} disabled={pending} className={`${menuItemClass} text-emerald-300 hover:bg-emerald-500/10`}><ArrowRight className="h-3.5 w-3.5" />Advance</button>
         )}

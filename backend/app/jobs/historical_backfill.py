@@ -20,7 +20,7 @@ from app.services.buyer_preference import compute_buyer_preference
 from app.services.funding_suitability import compute_funding_suitability
 from app.services.lead_scoring import refresh_lead_scoring
 from app.services.qualification import QualificationService
-from app.workflow import WORKFLOW_STAGES
+from app.workflow import WORKFLOW_STAGES, normalize_stage
 
 from app.jobs.award_check import (
     _award_api_id,
@@ -43,6 +43,9 @@ HISTORICAL_AWARD_MAX_PAGES = 100
 
 EARLIEST_SANE_YEAR = 2000
 
+# A settled deal is never re-flagged by requalification.
+TERMINAL_STAGES = ("funded", "lost_lead")
+
 
 async def requalify_existing_award_leads(db=None) -> dict[str, int]:
     """Apply current qualification rules to previously generated award leads.
@@ -64,7 +67,7 @@ async def requalify_existing_award_leads(db=None) -> dict[str, int]:
         .join(Company, Company.id == Opportunity.company_id)
         .where(Opportunity.lead_origin != "manual")
     )
-    checked = closed = flagged = passed = 0
+    checked = closed = flagged = passed = skipped = 0
     service = QualificationService(db)
     now = datetime.now(timezone.utc)
     for opportunity, award, tender, company in rows.all():
@@ -77,29 +80,40 @@ async def requalify_existing_award_leads(db=None) -> dict[str, int]:
             )
             continue
 
+        stage = normalize_stage(opportunity.kanban_stage)
+        if stage in TERMINAL_STAGES:
+            # A funded or lost deal is settled. Re-flagging it would mark a closed
+            # deal red, overwrite its next action, and bump the version out from
+            # under any in-flight write.
+            skipped += 1
+            continue
+
         reason = qualification.reason or qualification.failed_filter or "Current qualification failed"
         untouched = (
-            opportunity.kanban_stage == "new_lead"
+            stage == "new_lead"
             and opportunity.assigned_to is None
             and opportunity.contacted_at is None
             and not opportunity.notes
         )
-        opportunity.risk_flag = "red"
         opportunity.version += 1
         opportunity.updated_at = now
         if untouched:
+            opportunity.risk_flag = "red"
+            from_stage = opportunity.kanban_stage
             opportunity.kanban_stage = "lost_lead"
             opportunity.lost_reason = f"Automatic requalification: {reason}"
             opportunity.closed_at = now
             opportunity.next_action = None
             db.add(OpportunityAudit(
                 opportunity_id=opportunity.id,
-                from_stage="new_lead",
+                from_stage=from_stage,
                 to_stage="lost_lead",
                 changed_by="system:requalification",
             ))
             closed += 1
         else:
+            # Being worked already. Surface the qualification concern without
+            # overwriting risk_flag, which means supplier risk, not filter fit.
             opportunity.next_action = "Review qualification"
             reasons = list(opportunity.lead_priority_reasons or [])
             marker = f"Qualification review: {reason}"
@@ -112,8 +126,12 @@ async def requalify_existing_award_leads(db=None) -> dict[str, int]:
         passed=passed,
         closed=closed,
         flagged=flagged,
+        skipped=skipped,
     )
-    return {"checked": checked, "passed": passed, "closed": closed, "flagged": flagged}
+    return {
+        "checked": checked, "passed": passed, "closed": closed,
+        "flagged": flagged, "skipped": skipped,
+    }
 
 
 async def _find_earliest_award_date(tsa_db: TSADatabase) -> datetime | None:

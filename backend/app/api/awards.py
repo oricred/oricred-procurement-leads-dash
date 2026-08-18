@@ -2,16 +2,18 @@ import csv
 import io
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import and_, func, select
+from sqlalchemy import exists, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.expression import Exists
 
+from app.api.auth import get_current_user
 from app.database import get_db
 from app.models.award import Award
 from app.models.company import Company
-from app.models.contact import Contact
-from app.models.opportunity import Opportunity
+from app.models.opportunity import Opportunity, OpportunityAudit
 from app.models.watchlist import WatchlistItem
 from app.models.organization import Organization
 from app.models.tender import Tender
@@ -39,15 +41,21 @@ def _query_awards():
             Category.name.label("category_name"),
             Opportunity.id.label("opportunity_id"), Opportunity.kanban_stage.label("lead_stage"),
             Opportunity.contact_sufficiency.label("contact_readiness"), Company.id.label("company_id"),
-            WatchlistItem.id.label("watchlist_id"),
         )
         .outerjoin(Tender, Award.tender_id == Tender.id)
         .outerjoin(Category, Tender.category_id == Category.id)
         .outerjoin(Organization, Award.buyer_org_id == Organization.id)
         .outerjoin(Company, Award.supplier_company_id == Company.api_id)
         .outerjoin(Opportunity, Opportunity.award_id == Award.id)
-        .outerjoin(WatchlistItem, WatchlistItem.tender_id == Award.tender_id)
     )
+
+
+def _watched_award() -> Exists:
+    """A tender may carry several watchlist rows; joining them fans the award out.
+
+    Correlate instead so one award always yields exactly one row.
+    """
+    return exists().where(WatchlistItem.tender_id == Award.tender_id)
 
 
 def _filter_awards(query, supplier=None, buyer_org_id=None, province=None, buyer_scope=None,
@@ -76,9 +84,9 @@ def _filter_awards(query, supplier=None, buyer_org_id=None, province=None, buyer
     elif has_opportunity is False:
         query = query.where(Opportunity.id.is_(None))
     if watch_context == "watched":
-        query = query.where(WatchlistItem.id.isnot(None))
+        query = query.where(_watched_award())
     elif watch_context == "not_watched":
-        query = query.where(WatchlistItem.id.is_(None))
+        query = query.where(~_watched_award())
     return query
 
 
@@ -148,14 +156,27 @@ async def export_awards(
     return StreamingResponse(iter([stream.getvalue()]), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=oricred-awards.csv"})
 
 
-@router.post("/awards/{award_id}/lead", response_model=OpportunityRead)
-async def create_lead_from_award(award_id: str, db: AsyncSession = Depends(get_db)):
+@router.post("/awards/{award_id}/lead", response_model=OpportunityRead, status_code=status.HTTP_201_CREATED)
+async def create_lead_from_award(
+    award_id: str,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Convert an award into a lead sitting at the top of the Lead Inbox.
+
+    Manual conversion deliberately bypasses ``QualificationService`` — the point
+    is to pull in an award the automatic filters rejected. Responds 201 when a
+    lead is created and 200 when the award already had one.
+    """
+    from app.api.opportunities import _read_opportunity_with_context
+
     award = await db.get(Award, award_id)
     if not award:
         raise HTTPException(status_code=404, detail="Award not found")
     existing = (await db.execute(select(Opportunity).where(Opportunity.award_id == award.id))).scalar_one_or_none()
     if existing:
-        from app.api.opportunities import _read_opportunity_with_context
+        response.status_code = status.HTTP_200_OK
         return await _read_opportunity_with_context(existing, db)
 
     company = None
@@ -173,7 +194,7 @@ async def create_lead_from_award(award_id: str, db: AsyncSession = Depends(get_d
         award_id=award.id, tender_id=award.tender_id, company_id=company.id,
         kanban_stage="new_lead", needs_enrichment=provisional,
         lead_origin="manual",
-        contact_sufficiency="none", next_action="Resolve supplier identity" if provisional else "Find contact",
+        contact_sufficiency="none",
     )
     db.add(opp)
     await db.flush()
@@ -183,7 +204,25 @@ async def create_lead_from_award(award_id: str, db: AsyncSession = Depends(get_d
     await refresh_lead_scoring(
         opp, db, tender=tender, award=award, company=company, contacts=[],
     )
-    await db.commit()
+    if provisional:
+        # Scoring always lands on "Find contact" for a lead with no contacts, but
+        # a placeholder supplier has to be identified before anyone can be found.
+        opp.next_action = "Resolve supplier identity"
+    db.add(OpportunityAudit(
+        opportunity_id=opp.id, from_stage=None, to_stage="new_lead",
+        changed_by=current_user["name"],
+    ))
+    try:
+        await db.commit()
+    except IntegrityError:
+        # ``uq_opportunities_award_id`` — a concurrent request won the race.
+        await db.rollback()
+        winner = (
+            await db.execute(select(Opportunity).where(Opportunity.award_id == award_id))
+        ).scalar_one_or_none()
+        if not winner:
+            raise
+        response.status_code = status.HTTP_200_OK
+        return await _read_opportunity_with_context(winner, db)
     await db.refresh(opp)
-    from app.api.opportunities import _read_opportunity_with_context
     return await _read_opportunity_with_context(opp, db)

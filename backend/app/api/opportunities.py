@@ -26,7 +26,13 @@ from app.services.funding_suitability import compute_funding_suitability
 from app.services.buyer_preference import compute_buyer_preference
 from app.services.crm.sync import push_opportunity_to_crm
 from app.services.lead_scoring import choose_primary_contact, refresh_lead_scoring
-from app.services.lead_service import mark_opportunity_contacted, retry_contact_lookup_for_opportunity
+from app.utils import as_utc
+from app.services.lead_service import (
+    StageConflictError,
+    VersionConflictError,
+    mark_opportunity_contacted,
+    retry_contact_lookup_for_opportunity,
+)
 from app.workflow import LEGACY_STAGE_MAP, WORKFLOW_NEXT, is_workflow_stage, normalize_stage
 
 logger = structlog.get_logger()
@@ -142,8 +148,9 @@ async def _batch_load_opportunity_context(opportunities: list[Opportunity], db: 
 
 def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: Award | None = None, company: Company | None = None, contacts: list[ContactRead] | None = None, buyer_org_name: str | None = None, category_name: str | None = None) -> OpportunityRead:
     days_since = None
-    if award and award.award_date:
-        days_since = (datetime.now(timezone.utc) - award.award_date).days
+    award_date = as_utc(award.award_date) if award else None
+    if award_date:
+        days_since = (datetime.now(timezone.utc) - award_date).days
 
     return OpportunityRead(
         id=str(opp.id),
@@ -188,18 +195,29 @@ def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: 
 
 @router.get("", response_model=OpportunityList)
 async def list_opportunities(
-    stage: str | None = Query(None),
+    stage: list[str] | None = Query(None),
     assigned_to: str | None = Query(None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
+    """List opportunities, optionally narrowed to one or more stages.
+
+    ``stage`` may be repeated so the pipeline board can page each phase column
+    independently — a single global page drops late-stage deals off the board
+    once the table outgrows the limit.
+    """
     q = select(Opportunity)
     if stage:
-        stage = normalize_stage(stage)
-        if not is_workflow_stage(stage):
-            raise HTTPException(status_code=400, detail="Invalid opportunity stage")
-        stage_values = [stage] + [legacy for legacy, canonical in LEGACY_STAGE_MAP.items() if canonical == stage]
+        stage_values: list[str] = []
+        for requested in stage:
+            canonical = normalize_stage(requested)
+            if not is_workflow_stage(canonical):
+                raise HTTPException(status_code=400, detail="Invalid opportunity stage")
+            stage_values.append(canonical)
+            stage_values.extend(
+                legacy for legacy, mapped in LEGACY_STAGE_MAP.items() if mapped == canonical
+            )
         q = q.where(Opportunity.kanban_stage.in_(stage_values))
     if assigned_to:
         q = q.where(Opportunity.assigned_to == assigned_to)
@@ -364,10 +382,14 @@ async def mark_contacted(
             note=body.note,
             changed_by=current_user["name"],
         )
-    except ValueError:
-        raise HTTPException(status_code=404, detail="Opportunity not found")
-    except RuntimeError as e:
+    except VersionConflictError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except StageConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        # Missing opportunity, or a contact that belongs to someone else.
+        detail = str(e)
+        raise HTTPException(status_code=404 if "not found" in detail.lower() else 400, detail=detail)
     try:
         await push_opportunity_to_crm(opportunity_id)
     except Exception:
