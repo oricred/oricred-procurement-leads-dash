@@ -5,15 +5,20 @@ from io import BytesIO, StringIO
 from pathlib import Path
 
 from openpyxl import load_workbook
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.company import Company
 from app.models.contact import Contact
 from app.models.opportunity import Opportunity
 from app.services.lead_scoring import refresh_lead_scoring
+from app.services.text_utils import normalise_company_name
 
 IMPORT_SOURCE = "lead_import"
+# Each row costs two or three queries to decide. Bounding the row count keeps a
+# single request from monopolising a worker; the file-size ceiling lives in the
+# route (see _read_bounded in app/api/leads.py).
+MAX_IMPORT_ROWS = 10_000
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 IMPORT_METADATA_FIELDS = (
     ("contact_source_url", "Source URL"),
@@ -89,20 +94,73 @@ def _canonicalise_row(row: ImportRow) -> ImportRow:
     return ImportRow(row_number=row.row_number, values=mapped)
 
 
+SYNTHETIC_COMPANY_PREFIXES = ("provisional:", "historical:", "award:")
+
+
 async def _find_company_and_opportunity(
     company_name: str, db: AsyncSession
-) -> tuple[Company | None, Opportunity | None]:
-    result = await db.execute(
-        select(Company).where(Company.name.ilike(company_name.strip()))
+) -> tuple[Company | None, Opportunity | None, str | None]:
+    """Resolve a company by name.
+
+    Returns (company, opportunity, error). `error` is set when the name matches
+    more than one real company, so the caller can skip the row with a useful
+    message. The previous implementation called scalar_one_or_none() on an
+    ilike match and raised MultipleResultsFound — an unhandled HTTP 500 partway
+    through an import. Duplicate supplier names are routine here: the award
+    pipeline creates `provisional:` companies and the historical sync creates
+    `historical:` ones, both alongside canonical rows with the same name.
+    """
+    target = normalise_company_name(company_name)
+    if not target:
+        return None, None, "Blank company name"
+
+    # Exact match first — indexed, and unambiguous when it hits.
+    candidates = list(
+        (
+            await db.execute(
+                select(Company).where(func.lower(Company.name) == company_name.strip().lower())
+            )
+        )
+        .scalars()
+        .all()
     )
-    company = result.scalar_one_or_none()
-    if not company:
-        return None, None
-    result = await db.execute(
-        select(Opportunity).where(Opportunity.company_id == company.id).limit(1)
+    if not candidates:
+        # Fall back to the same normalisation the enrichment matcher uses, so
+        # the two agree about what "the same company" means.
+        candidates = [
+            c
+            for c in (await db.execute(select(Company))).scalars().all()
+            if normalise_company_name(c.name) == target
+        ]
+
+    if not candidates:
+        return None, None, None
+    if len(candidates) > 1:
+        real = [
+            c for c in candidates
+            if not (c.api_id or "").startswith(SYNTHETIC_COMPANY_PREFIXES)
+        ]
+        if len(real) != 1:
+            return None, None, (
+                f"{len(candidates)} companies match {company_name!r} — "
+                "import by lead_id instead"
+            )
+        candidates = real
+
+    company = candidates[0]
+    opportunity = (
+        (
+            await db.execute(
+                select(Opportunity)
+                .where(Opportunity.company_id == company.id)
+                .order_by(Opportunity.created_at.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
     )
-    opportunity = result.scalars().first()
-    return company, opportunity
+    return company, opportunity, None
 
 
 def parse_import_file(filename: str | None, content: bytes) -> list[ImportRow]:
@@ -116,6 +174,9 @@ def parse_import_file(filename: str | None, content: bytes) -> list[ImportRow]:
             ]
         except UnicodeDecodeError as exc:
             raise ValueError("CSV files must be UTF-8 encoded") from exc
+        except csv.Error as exc:
+            # A malformed CSV is the operator's problem to fix, not a 500.
+            raise ValueError(f"The CSV file could not be read: {exc}") from exc
     elif suffix == ".xlsx":
         try:
             worksheet = load_workbook(BytesIO(content), read_only=True, data_only=True).active
@@ -136,6 +197,12 @@ def parse_import_file(filename: str | None, content: bytes) -> list[ImportRow]:
             raise ValueError("The XLSX file could not be read") from exc
     else:
         raise ValueError("Only .csv and .xlsx files are supported")
+
+    if len(rows) > MAX_IMPORT_ROWS:
+        raise ValueError(
+            f"That file has {len(rows):,} rows. Split it into files of "
+            f"{MAX_IMPORT_ROWS:,} rows or fewer."
+        )
     return [_canonicalise_row(row) for row in rows]
 
 
@@ -163,7 +230,9 @@ async def _decide(row: ImportRow, db: AsyncSession) -> ImportDecision:
             return ImportDecision(row, "skip", "Lead has no linked company", opportunity)
         company_id = opportunity.company_id
     elif company_name:
-        company, opportunity = await _find_company_and_opportunity(company_name, db)
+        company, opportunity, error = await _find_company_and_opportunity(company_name, db)
+        if error:
+            return ImportDecision(row, "skip", error)
         if not company:
             return ImportDecision(row, "skip", f"Unknown company: {company_name}")
         company_id = company.id
@@ -250,14 +319,56 @@ def _result(decision: ImportDecision) -> dict[str, object]:
     }
 
 
-async def preview_import(rows: list[ImportRow], db: AsyncSession) -> dict[str, object]:
+def _validate_columns(rows: list[ImportRow]) -> None:
     if not rows:
         raise ValueError("The import file contains no data rows")
     has_lead_id = any("lead_id" in row.values for row in rows)
     has_company = any("company" in row.values for row in rows)
     if not has_lead_id and not has_company:
         raise ValueError("The import file must include a lead_id or company column")
-    decisions = [await _decide(row, db) for row in rows]
+
+
+def _row_identity(decision: ImportDecision) -> tuple[str, str] | None:
+    """A key for detecting the same contact appearing twice in one file."""
+    if not decision.company_id:
+        return None
+    values = decision.row.values
+    email = values.get("contact_email", "").strip().lower()
+    phone = _normalise_phone(values.get("contact_phone", ""))
+    name = _normalise(values.get("contact_name", ""))
+    return (decision.company_id, email or phone or name)
+
+
+async def _decide_all(rows: list[ImportRow], db: AsyncSession) -> list[ImportDecision]:
+    """Decide every row once, against committed state.
+
+    apply_import used to call preview_import and then re-decide each row, which
+    doubled the query cost and let the two passes disagree: autoflush made rows
+    written during the loop visible to the second pass, so the counts shown to
+    the operator did not match what was applied.
+
+    no_autoflush keeps the decisions consistent with the state the operator saw
+    in the preview.
+    """
+    _validate_columns(rows)
+    decisions: list[ImportDecision] = []
+    seen: set[tuple[str, str]] = set()
+    with db.no_autoflush:
+        for row in rows:
+            decision = await _decide(row, db)
+            identity = _row_identity(decision)
+            if decision.action != "skip" and identity is not None:
+                if identity in seen:
+                    decision = ImportDecision(
+                        row, "skip", "Duplicate of an earlier row in this file"
+                    )
+                else:
+                    seen.add(identity)
+            decisions.append(decision)
+    return decisions
+
+
+def _summarise(decisions: list[ImportDecision]) -> dict[str, object]:
     return {
         "total_rows": len(decisions),
         "creates": sum(decision.action == "create" for decision in decisions),
@@ -267,12 +378,17 @@ async def preview_import(rows: list[ImportRow], db: AsyncSession) -> dict[str, o
     }
 
 
+async def preview_import(rows: list[ImportRow], db: AsyncSession) -> dict[str, object]:
+    return _summarise(await _decide_all(rows, db))
+
+
 async def apply_import(rows: list[ImportRow], db: AsyncSession) -> dict[str, object]:
-    preview = await preview_import(rows, db)
+    decisions = await _decide_all(rows, db)
+    preview = _summarise(decisions)
     affected_company_ids: set[str] = set()
     applied = 0
-    for row in rows:
-        decision = await _decide(row, db)
+    for decision in decisions:
+        row = decision.row
         if decision.action == "skip":
             continue
         company_id = decision.company_id or (

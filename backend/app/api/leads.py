@@ -14,6 +14,7 @@ from app.models.opportunity import Opportunity
 from app.models.tender import Tender
 from app.schemas.opportunity import OpportunityList
 from app.services.lead_contact_import import apply_import, parse_import_file, preview_import
+from app.services.text_utils import write_csv_row
 from app.workflow import LEGACY_STAGE_MAP, normalize_stage
 
 router = APIRouter(prefix="/leads", tags=["leads"])
@@ -149,7 +150,8 @@ async def export_leads(
     )
     for lead in leads.items:
         contact = lead.primary_contact
-        writer.writerow(
+        write_csv_row(
+            writer,
             [
                 lead.id,
                 lead.company_name,
@@ -167,23 +169,45 @@ async def export_leads(
                 lead.lead_priority_score,
                 lead.next_action,
                 lead.assigned_to,
-            ]
+            ],
         )
+    # BOM so Excel on Windows renders names with diacritics correctly.
     return StreamingResponse(
-        iter([stream.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=oricred-leads.csv"},
+        iter(["﻿" + stream.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="oricred-leads.csv"'},
     )
+
+
+async def _read_bounded(file: UploadFile, limit: int) -> bytes:
+    """Read at most `limit` bytes, refusing anything larger.
+
+    Checks the declared size first, then enforces the ceiling while reading
+    because the declared size is client-supplied and may lie. The previous code
+    called file.read() and checked len() afterwards, so a multi-gigabyte upload
+    was fully buffered into the worker before being rejected.
+    """
+    megabytes = limit // (1024 * 1024)
+    detail = f"Import files must be {megabytes} MB or smaller"
+    if file.size is not None and file.size > limit:
+        raise HTTPException(status_code=413, detail=detail)
+
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(64 * 1024):
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(status_code=413, detail=detail)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 async def _parse_contact_import(file: UploadFile) -> list:
     if not file.filename:
         raise HTTPException(status_code=400, detail="Choose a CSV or XLSX file to import")
-    content = await file.read()
+    content = await _read_bounded(file, MAX_IMPORT_BYTES)
     if not content:
         raise HTTPException(status_code=400, detail="The import file is empty")
-    if len(content) > MAX_IMPORT_BYTES:
-        raise HTTPException(status_code=400, detail="Import files must be 10 MB or smaller")
     try:
         return parse_import_file(file.filename, content)
     except ValueError as exc:
