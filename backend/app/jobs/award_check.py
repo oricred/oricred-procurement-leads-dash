@@ -1,12 +1,12 @@
 import hashlib
 from collections import defaultdict
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import structlog
 from sqlalchemy import or_, select
-
 
 from app.utils import MAX_VALID_YEAR, parse_datetime
 
@@ -31,11 +31,15 @@ from app.models.past_due import PastDueQueue
 from app.models.tender import Tender
 from app.models.watchlist import WatchlistItem
 from app.services.buyer_preference import compute_buyer_preference
+from app.services.contact_enrichment import RECOVERABLE
 from app.services.crm.sync import push_opportunity_to_crm
 from app.services.email_alert import EmailAlertService
 from app.services.funding_suitability import compute_funding_suitability
 from app.services.lead_scoring import refresh_lead_scoring
-from app.services.lead_service import retry_contact_lookup_for_opportunity, retry_new_lead_contact_lookups
+from app.services.lead_service import (
+    retry_contact_lookup_for_opportunity,
+    retry_new_lead_contact_lookups,
+)
 from app.services.text_utils import best_title
 from app.workflow import WORKFLOW_STAGES
 
@@ -63,6 +67,9 @@ ORGANIZATION_FIELDS = [
 # Award publication may be delayed or corrected by a source. Re-reading this
 # window makes the ingestion idempotent while keeping the scheduled query bounded.
 AWARD_INGEST_LOOKBACK_DAYS = 30
+# Every run re-reads this much already-seen history, so a late-published award
+# cannot fall through the boundary between two runs.
+AWARD_INGEST_OVERLAP_DAYS = 3
 AWARD_INGEST_LIMIT = 5_000
 AWARD_INGEST_MAX_PAGES = 20
 
@@ -79,27 +86,63 @@ def _award_api_id(raw: dict) -> str:
     return f"award:{hashlib.sha1(identity.encode('utf-8')).hexdigest()[:32]}"
 
 
+@dataclass(frozen=True)
+class ResolvedAwardDate:
+    """An award date and whether we actually read it from the source.
+
+    `from_source` exists to keep two different jobs honest about the same
+    number. The award date is a business value that must never be NULL, so the
+    resolver synthesises one when the source has nothing usable. The ingestion
+    cursor is a sync value that must never move past a date we have confirmed.
+    Feeding a synthesised date into the cursor pushes it to today and silently
+    skips every award published afterwards with an older date — see
+    docs/specifications/remediation-03-ingestion-correctness.md section 1.
+    """
+
+    value: datetime
+    from_source: bool
+
+
+def _as_aware(value: datetime | None) -> datetime | None:
+    """Treat a naive datetime as UTC.
+
+    Values reach the resolver from two sources: parse_datetime, which always
+    returns an aware datetime, and the database. PostgreSQL round-trips
+    DateTime(timezone=True) as aware; SQLite discards the offset and hands back
+    a naive value. Comparing the two raises, so normalise at the boundary.
+    """
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=timezone.utc)
+
+
 def _resolve_award_date(
     raw_date: Any,
     source_created_at: datetime | None,
     discovered_at: datetime,
     now: datetime,
-) -> datetime:
+) -> ResolvedAwardDate:
     """Resolve award date. Never returns None.
 
     Priority:
-    1. Raw date from source — if it parses and is sane, use as-is
-    2. Source created_at — the full timestamp from TSA DB (entire date, no substitution)
-    3. discovered_at — when we first saw the record
+    1. Raw date from source — if it parses and is sane, use as-is  (from_source)
+    2. Source created_at — the full timestamp from TSA DB           (from_source)
+    3. discovered_at — when we first saw the record                 (synthesised)
     """
+    source_created_at = _as_aware(source_created_at)
+    discovered_at = _as_aware(discovered_at) or now
+    now = _as_aware(now) or now
+
     dt = parse_datetime(raw_date)
     if dt is not None and dt <= discovered_at:
-        return dt
+        return ResolvedAwardDate(dt, from_source=True)
 
     if source_created_at is not None and source_created_at <= now:
-        return source_created_at
+        return ResolvedAwardDate(source_created_at, from_source=True)
 
-    return discovered_at if discovered_at <= now else now
+    return ResolvedAwardDate(
+        discovered_at if discovered_at <= now else now, from_source=False
+    )
 
 
 async def _upsert_awarded_company(db, raw: dict, company_by_name: dict[str, dict], now: datetime) -> Company:
@@ -159,7 +202,10 @@ async def _upsert_tender_for_award(db, raw: dict, metadata: dict | None, now: da
             closing_date=parse_datetime(metadata.get("closing_date")),
             buyer_org_id=buyer_org_id,
             tender_type=metadata.get("type"),
-            published_at=metadata.get("publication_date"),
+            # parse_datetime, matching closing_date above and the update branch
+            # below. Passing the raw value here skipped the MAX_VALID_YEAR guard
+            # and fails outright whenever the source hands back a string.
+            published_at=parse_datetime(metadata.get("publication_date")),
             discovered_at=now,
         )
         db.add(tender)
@@ -248,9 +294,18 @@ async def check_awards_for_watching(backfill: bool = False):
         async with async_session() as db:
             now = datetime.now(timezone.utc)
             new_opportunity_ids: list[str] = []
-            ingested_award_timestamps: list[datetime] = []
+            # Only dates we actually read from Tenders-SA. A synthesised date
+            # would push the cursor to today and skip everything published
+            # afterwards with an older award_date.
+            source_backed_timestamps: list[datetime] = []
+            synthesised_dates = 0
             state = await db.get(AwardIngestionState, "tenders_sa")
-            since = now - timedelta(days=AWARD_INGEST_LOOKBACK_DAYS) if backfill else (state.latest_award_at if state and state.latest_award_at else now - timedelta(days=AWARD_INGEST_LOOKBACK_DAYS))
+            if backfill or not (state and state.latest_award_at):
+                since = now - timedelta(days=AWARD_INGEST_LOOKBACK_DAYS)
+            else:
+                # Re-read a fixed window on every run. The upsert path is
+                # idempotent by api_id, and the source backfills late records.
+                since = _as_aware(state.latest_award_at) - timedelta(days=AWARD_INGEST_OVERLAP_DAYS)
             raw_awards: list[dict] = []
             try:
                 for page in range(AWARD_INGEST_MAX_PAGES):
@@ -323,15 +378,17 @@ async def check_awards_for_watching(backfill: bool = False):
                 award.amount = raw.get("amount")
                 award.publication_date = parse_datetime(raw.get("publication_date"))
                 award.source_created_at = parse_datetime(raw.get("created_at"))
-                award.award_date = _resolve_award_date(
+                resolved = _resolve_award_date(
                     raw.get("award_date"), award.source_created_at, award.discovered_at, now,
                 )
+                award.award_date = resolved.value
                 award.bee_level = raw.get("bee_level")
                 award.bee_points = raw.get("bee_points")
                 award.buyer_org_id = tender.buyer_org_id
-                timestamp = award.award_date
-                if timestamp:
-                    ingested_award_timestamps.append(timestamp)
+                if resolved.from_source:
+                    source_backed_timestamps.append(resolved.value)
+                else:
+                    synthesised_dates += 1
 
                 # Watchlist matching happens after the Tenders-SA award was stored.
                 watch = (await db.execute(select(WatchlistItem).where(WatchlistItem.tender_id == tender.id, WatchlistItem.status == "watching"))).scalar_one_or_none()
@@ -353,7 +410,11 @@ async def check_awards_for_watching(backfill: bool = False):
                 await refresh_lead_scoring(opp, db, tender=tender, award=award, company=company, contacts=[])
                 opp.related_bidders = [
                     {"name": name, "inferred": False, "reason": "confirmed bidder"}
-                    for name in bidders_by_tender.get(tender.api_id, []) if name.lower() != supplier.lower()
+                    # Keyed by the Tenders-SA row UUID (a.tender_id == t.id),
+                    # which is what query_bidders returned. tender.api_id holds
+                    # the business reference (t.tender_id) and never matches.
+                    for name in bidders_by_tender.get(str(raw.get("tender_id") or ""), [])
+                    if name.lower() != supplier.lower()
                 ] or None
                 new_opportunity_ids.append(str(opp.id))
                 await email.send(
@@ -364,33 +425,44 @@ async def check_awards_for_watching(backfill: bool = False):
                 )
 
             await _mark_overdue_watches(db, email, now)
-            if ingested_award_timestamps:
-                valid_timestamps = [ts for ts in ingested_award_timestamps if ts <= now]
-                if valid_timestamps:
-                    latest_award_at = max(valid_timestamps)
-                    if not state:
-                        state = AwardIngestionState(source="tenders_sa", latest_award_at=latest_award_at)
-                        db.add(state)
-                    elif not state.latest_award_at or latest_award_at > state.latest_award_at:
-                        state.latest_award_at = latest_award_at
-                else:
-                    logger.warning("all_award_timestamps_in_future", count=len(ingested_award_timestamps))
+            if source_backed_timestamps:
+                # Never past now, even if the source hands us a future date.
+                latest_award_at = min(max(source_backed_timestamps), now)
+                if not state:
+                    state = AwardIngestionState(source="tenders_sa", latest_award_at=latest_award_at)
+                    db.add(state)
+                elif not state.latest_award_at or latest_award_at > _as_aware(state.latest_award_at):
+                    state.latest_award_at = latest_award_at
+            elif raw_awards:
+                # Rows ingested but nothing to advance on: every date was
+                # synthesised. Visible rather than silently stalling.
+                logger.warning(
+                    "award_cursor_not_advanced",
+                    awards_seen=len(raw_awards),
+                    synthesised_dates=synthesised_dates,
+                )
             await db.commit()
 
             contacts_added = 0
+            lookup_errors = 0
             for opportunity_id in new_opportunity_ids:
                 try:
                     async with async_session() as lookup_db:
-                        _, added = await retry_contact_lookup_for_opportunity(opportunity_id, lookup_db, tsa_db)
-                        contacts_added += added
+                        _, lookup = await retry_contact_lookup_for_opportunity(
+                            opportunity_id, lookup_db, tsa_db
+                        )
+                        contacts_added += lookup.added
+                        lookup_errors += lookup.errors
                     await push_opportunity_to_crm(opportunity_id)
-                except Exception as exc:
+                except RECOVERABLE as exc:
+                    lookup_errors += 1
                     logger.warning("lead_post_create_sync_failed", opportunity_id=opportunity_id, error=str(exc))
 
             retry_processed = await retry_new_lead_contact_lookups(limit=100)
             logger.info(
                 "award_ingestion_complete", source="tenders_sa", since=since.isoformat(), awards_checked=len(raw_awards),
                 leads_created=len(new_opportunity_ids), contacts_added=contacts_added,
+                lookup_errors=lookup_errors,
                 contact_retry_processed=retry_processed,
             )
             return len(raw_awards)
@@ -438,13 +510,12 @@ async def find_corrupted_award_dates(db=None) -> list[Award]:
 
 
 async def fix_corrupted_award_dates() -> int:
-    """Repair awards with NULL or obviously-wrong award_date.
+    """Repair awards with a NULL or obviously-wrong award_date.
 
-    Re-parses the raw payload and applies _resolve_award_date, which
-    aggressively recovers a usable date using year correction (via
-    reference years from pub_date, tender dates, or discovered_at),
-    then falls back to the best available proxy. Returns the count of
-    awards whose award_date actually changed.
+    Re-parses the raw payload through _resolve_award_date, which prefers the
+    source date, falls back to the source's created_at, and finally to our own
+    discovery timestamp. Returns the count of awards whose date actually
+    changed.
     """
 
     async with async_session() as db:
@@ -457,21 +528,19 @@ async def fix_corrupted_award_dates() -> int:
         for award in rows:
             original = award.award_date
 
-            t_result = await db.execute(select(Tender).where(Tender.id == award.tender_id))
-            tender = t_result.scalar_one_or_none()
-
             recovered = _resolve_award_date(
                 award.raw_payload.get("award_date") if award.raw_payload else None,
                 award.source_created_at, award.discovered_at, now,
             )
-            if recovered != original:
-                award.award_date = recovered
+            if recovered.value != original:
+                award.award_date = recovered.value
                 fixed += 1
                 logger.info(
                     "award_date_recovered",
                     award_id=award.id,
                     original=str(original) if original else "NULL",
-                    resolved=recovered.isoformat(),
+                    resolved=recovered.value.isoformat(),
+                    from_source=recovered.from_source,
                 )
 
         await db.commit()
