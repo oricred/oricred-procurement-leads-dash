@@ -59,6 +59,20 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
   } | null>(null);
 
   const queryClient = useQueryClient();
+
+  /**
+   * Refresh every view that renders this opportunity. The modal reads
+   * ['opportunity', id], the pipeline board reads ['opportunities'] and the
+   * lead inbox reads ['leads'] — a change to contacts or notes shows up in all
+   * three. Invalidating ['opportunities', id] matches none of them, because a
+   * filter key longer than the query key never matches.
+   */
+  const invalidateOpportunityViews = () => {
+    queryClient.invalidateQueries({ queryKey: ['opportunity', opp.id] });
+    queryClient.invalidateQueries({ queryKey: ['opportunities'] });
+    queryClient.invalidateQueries({ queryKey: ['leads'] });
+  };
+
   const { data: assignees = [] } = useQuery({
     queryKey: ['assignees'],
     queryFn: async () => (await auth.assignees()).data,
@@ -78,7 +92,7 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
       }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['opportunity', opp.id] });
+      invalidateOpportunityViews();
       setShowAddContact(false);
       setNewContact({ first_name: '', last_name: '', email: '', phone_direct: '', phone_mobile: '', job_title: '', linkedin_url: '', is_primary: false, notes: '' });
     },
@@ -87,7 +101,7 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
   const deleteContactMutation = useMutation({
     mutationFn: (contactId: string) => contactsApi.delete(contactId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['opportunity', opp.id] });
+      invalidateOpportunityViews();
     },
   });
 
@@ -95,7 +109,7 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
     mutationFn: ({ id, body }: { id: string; body: Parameters<typeof contactsApi.update>[1] }) =>
       contactsApi.update(id, body),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['opportunity', opp.id] });
+      invalidateOpportunityViews();
       setEditingContactId(null);
       setEditForm(null);
     },
@@ -151,16 +165,23 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
   const findContactMutation = useMutation({
     mutationFn: () => opportunities.findContact(opp.id),
     onSuccess: (res) => {
-      const added = res.data.contacts_added;
+      const { contacts_added: added, lookup_errors: errors = 0 } = res.data;
       if (added > 0) {
         setFindContactFeedback(`Found ${added} contact${added !== 1 ? 's' : ''}`);
         setShowManualGuidance(false);
+      } else if (errors > 0) {
+        // A lookup that could not reach Tenders-SA is not the same as one that
+        // found nothing. Only the latter is worth manual research.
+        setFindContactFeedback('Could not reach Tenders-SA — try again shortly');
+        setShowManualGuidance(false);
       } else {
-        setFindContactFeedback('No contacts found in Tenders-SA');
+        setFindContactFeedback('No contacts on file at Tenders-SA for this supplier');
         setShowManualGuidance(true);
       }
-      queryClient.invalidateQueries({ queryKey: ['leads'] });
-      queryClient.invalidateQueries({ queryKey: ['opportunities', opp.id] });
+      // The modal reads ['opportunity', id]; the pipeline board reads
+      // ['opportunities']. A filter key longer than the query key never matches,
+      // so the previous ['opportunities', id] refreshed neither.
+      invalidateOpportunityViews();
       setTimeout(() => setFindContactFeedback(null), 6000);
     },
     onError: () => {
@@ -172,7 +193,7 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
   const updateMutation = useMutation({
     mutationFn: (body: { notes?: string; risk_flag?: string; assigned_to?: string }) => opportunities.update(opp.id, body),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['opportunity', opp.id] });
+      invalidateOpportunityViews();
       setEditingNotes(false);
     },
   });

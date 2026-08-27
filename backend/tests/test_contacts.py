@@ -1,5 +1,5 @@
 from app.models.contact import Contact
-from app.schemas.contact import ContactRead, ContactCreate, ContactUpdate
+from app.schemas.contact import ContactCreate, ContactRead, ContactUpdate
 from app.services.contact_enrichment import _split_name
 
 
@@ -31,10 +31,22 @@ class TestContactModel:
         assert "organization_id" in fields
         assert "source" in fields
 
-    def test_unique_constraints(self):
-        constraints = {c.name for c in Contact.__table__.constraints}
-        assert "uq_contact_company_email" in constraints
-        assert "uq_contact_org_email" in constraints
+    def test_email_uniqueness_is_enforced_per_entity(self):
+        indexes = {i.name: i for i in Contact.__table__.indexes}
+        assert "uq_contact_company_email" in indexes
+        assert "uq_contact_org_email" in indexes
+        assert indexes["uq_contact_company_email"].unique
+        assert indexes["uq_contact_org_email"].unique
+
+    def test_email_uniqueness_is_partial(self):
+        """Contacts known only by phone store email as NULL, and any number of
+        those must coexist for one company. A full unique constraint let only
+        one exist — see remediation-01 section 3."""
+        for name in ("uq_contact_company_email", "uq_contact_org_email"):
+            index = next(i for i in Contact.__table__.indexes if i.name == name)
+            predicate = index.dialect_options["postgresql"].get("where")
+            assert predicate is not None, f"{name} must be partial"
+            assert "email IS NOT NULL" in str(predicate)
 
 
 class TestContactSchema:

@@ -1,31 +1,40 @@
 from collections import defaultdict
 from datetime import datetime, timezone
-from decimal import Decimal
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, update, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
 from app.api.auth import get_current_user
-from app.models.opportunity import Opportunity, OpportunityAudit
+from app.database import get_db
 from app.models.award import Award
-from app.models.tender import Tender
-from app.models.company import Company
-from app.models.organization import Organization
-from app.models.contact import Contact
-from app.models.user import User
 from app.models.category import Category
-from app.schemas.opportunity import OpportunityRead, OpportunityUpdate, OpportunityList, AuditEntry, OpportunityContactedUpdate, OpportunityTransition
-from app.schemas.contact import ContactRead
+from app.models.company import Company
+from app.models.contact import Contact
+from app.models.opportunity import Opportunity, OpportunityAudit
+from app.models.organization import Organization
+from app.models.tender import Tender
+from app.models.user import User
 from app.schemas.buyer_relationship import BuyerRelationshipRead
-from app.services.buyer_relationship import compute_relationship, get_relationship
-from app.services.funding_suitability import compute_funding_suitability
+from app.schemas.contact import ContactRead
+from app.schemas.opportunity import (
+    AuditEntry,
+    OpportunityContactedUpdate,
+    OpportunityList,
+    OpportunityRead,
+    OpportunityTransition,
+    OpportunityUpdate,
+)
 from app.services.buyer_preference import compute_buyer_preference
+from app.services.buyer_relationship import compute_relationship, get_relationship
 from app.services.crm.sync import push_opportunity_to_crm
-from app.services.lead_scoring import choose_primary_contact, refresh_lead_scoring
-from app.services.lead_service import mark_opportunity_contacted, retry_contact_lookup_for_opportunity
+from app.services.funding_suitability import compute_funding_suitability
+from app.services.lead_scoring import choose_primary_contact
+from app.services.lead_service import (
+    mark_opportunity_contacted,
+    retry_contact_lookup_for_opportunity,
+)
 from app.workflow import LEGACY_STAGE_MAP, WORKFLOW_NEXT, is_workflow_stage, normalize_stage
 
 logger = structlog.get_logger()
@@ -318,11 +327,18 @@ async def _read_opportunity_with_context(opp: Opportunity, db: AsyncSession) -> 
 @router.post("/{opportunity_id}/find-contact")
 async def find_opportunity_contact(opportunity_id: str, db: AsyncSession = Depends(get_db)):
     try:
-        opp, added = await retry_contact_lookup_for_opportunity(opportunity_id, db)
+        opp, result = await retry_contact_lookup_for_opportunity(opportunity_id, db)
     except ValueError:
         raise HTTPException(status_code=404, detail="Opportunity not found")
     opportunity = await _read_opportunity_with_context(opp, db)
-    return {"opportunity": opportunity.model_dump(), "contacts_added": added}
+    # lookup_errors lets the client distinguish "Tenders-SA holds no contact for
+    # this supplier" from "we could not reach Tenders-SA". Both give added=0,
+    # and only the first should send the operator off to research manually.
+    return {
+        "opportunity": opportunity.model_dump(),
+        "contacts_added": result.added,
+        "lookup_errors": result.errors,
+    }
 
 
 @router.post("/{opportunity_id}/mark-contacted", response_model=OpportunityRead)

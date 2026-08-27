@@ -6,7 +6,7 @@ from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
 
 logger = structlog.get_logger()
-engine = create_async_engine(settings.database_url, echo=settings.debug)
+engine = create_async_engine(settings.database_url, echo=False)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -91,23 +91,47 @@ async def _ensure_award_columns() -> None:
             )
 
 
-async def _ensure_contact_email_nullable() -> None:
-    """
-    Allow externally enriched contacts to be recorded when only a phone is known.
-    On PostgreSQL this is a safe ALTER TABLE. SQLite dev databases are created
-    from scratch by create_all() with the correct nullable schema, so skip.
+async def _ensure_contact_indexes() -> None:
+    """Replace the full unique constraints on contacts with partial ones.
+
+    A contact known only by a phone number stores email as NULL. Under the
+    original UniqueConstraint("company_id", "email") those rows collided on the
+    empty string, so only one phone-only contact could exist per company and
+    every subsequent enriched director was rejected with an IntegrityError that
+    the caller logged as a warning. See remediation-01 section 3.
+
+    create_all() skips existing tables entirely, indexes included, so deployed
+    databases need this explicit DDL. Idempotent.
     """
     async with engine.begin() as conn:
-        if conn.dialect.name == "sqlite":
-            return
         await conn.execute(text("UPDATE contacts SET email = NULL WHERE email = ''"))
-        await conn.execute(text("ALTER TABLE contacts ALTER COLUMN email DROP NOT NULL"))
+
+        if conn.dialect.name == "sqlite":
+            await conn.execute(text("DROP INDEX IF EXISTS uq_contact_company_email"))
+            await conn.execute(text("DROP INDEX IF EXISTS uq_contact_org_email"))
+        else:
+            await conn.execute(
+                text("ALTER TABLE contacts DROP CONSTRAINT IF EXISTS uq_contact_company_email")
+            )
+            await conn.execute(
+                text("ALTER TABLE contacts DROP CONSTRAINT IF EXISTS uq_contact_org_email")
+            )
+            await conn.execute(text("ALTER TABLE contacts ALTER COLUMN email DROP NOT NULL"))
+
+        await conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_contact_company_email "
+            "ON contacts (company_id, email) WHERE email IS NOT NULL"
+        ))
+        await conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_contact_org_email "
+            "ON contacts (organization_id, email) WHERE email IS NOT NULL"
+        ))
 
 
-async def init_db():
+async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await _ensure_opportunity_columns()
     await _ensure_award_columns()
-    await _ensure_contact_email_nullable()
+    await _ensure_contact_indexes()
     logger.info("database_ready", dialect=engine.dialect.name)

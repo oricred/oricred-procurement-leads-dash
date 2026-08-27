@@ -3,8 +3,6 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
-from app.utils import parse_datetime
-
 import structlog
 from sqlalchemy import select
 
@@ -12,8 +10,9 @@ from app.clients.tsa_db import TSADatabase
 from app.database import async_session
 from app.models.company import Company
 from app.models.historical_contact import HistoricalContact
-from app.services.contact_enrichment import enrich_company_contacts_by_id
+from app.services.contact_enrichment import EnrichmentResult, enrich_company_contacts_by_id
 from app.services.qualification import QualificationService
+from app.utils import parse_datetime
 
 logger = structlog.get_logger()
 
@@ -184,12 +183,19 @@ async def sync_historical_contacts(limit: int = 1000, cutoff_days: int = HISTORI
 
             await db.commit()
 
-        contacts_added = 0
+        enrichment = EnrichmentResult()
         for company_id in company_ids_for_enrichment:
-            try:
-                contacts_added += await enrich_company_contacts_by_id(company_id, tsa_db)
-            except Exception as e:
-                logger.warning("historical_contact_enrichment_failed", company_id=company_id, error=str(e))
+            # enrich_company_contacts_by_id already narrows to RECOVERABLE
+            # internally and reports failures via the result counters, so a
+            # broad handler here would only re-hide programming errors.
+            enrichment = enrichment + await enrich_company_contacts_by_id(company_id, tsa_db)
+        contacts_added = enrichment.added
+        if enrichment.errors:
+            logger.warning(
+                "historical_contact_enrichment_errors",
+                errors=enrichment.errors,
+                attempted=enrichment.companies_attempted,
+            )
 
         logger.info(
             "historical_contacts_sync_complete",
@@ -198,7 +204,13 @@ async def sync_historical_contacts(limit: int = 1000, cutoff_days: int = HISTORI
             history_updates=updated,
             contacts_added=contacts_added,
         )
-        return {"awards_checked": len(awards), "companies_imported": imported, "history_updates": updated, "contacts_added": contacts_added}
+        return {
+            "awards_checked": len(awards),
+            "companies_imported": imported,
+            "history_updates": updated,
+            "contacts_added": contacts_added,
+            "enrichment_errors": enrichment.errors,
+        }
     finally:
         await tsa_db.close()
 
