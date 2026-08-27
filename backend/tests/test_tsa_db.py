@@ -1,11 +1,10 @@
 from app.clients.tsa_db import (
-    _map_fields,
-    _build_tender_where,
+    TENDER_FIELD_MAP,
     _build_award_where,
     _build_company_where,
     _build_org_where,
-    TENDER_FIELD_MAP,
-    AWARD_FIELD_MAP,
+    _build_tender_where,
+    _map_fields,
 )
 
 
@@ -136,3 +135,67 @@ class TestBuildOrgWhere:
     def test_org_type_filter(self):
         where, params = _build_org_where({"type": ["GOVERNMENT", "MUNICIPALITY"]})
         assert "LOWER(o.organization_type) = ANY(:org_types)" in where
+
+
+class TestContactQueryExecution:
+    """Regression guard for the C1 defect.
+
+    query_directors, query_key_personnel and query_source_directors each
+    referenced an undefined `offset` name and raised NameError on every call.
+    Every caller wrapped them in `except Exception`, so the crash surfaced to
+    operators as "no contacts found". These tests execute the methods rather
+    than only inspecting the SQL they would build.
+    """
+
+    async def test_query_directors_executes(self, tsa_stub):
+        rows = await tsa_stub.query_directors(company_ids=["company-1"])
+        assert rows == []
+        assert "FROM directors" in tsa_stub.last_sql
+        assert tsa_stub.last_params["company_ids"] == ["company-1"]
+
+    async def test_query_key_personnel_executes(self, tsa_stub):
+        rows = await tsa_stub.query_key_personnel(company_ids=["company-1"])
+        assert rows == []
+        assert "FROM key_personnel" in tsa_stub.last_sql
+        assert tsa_stub.last_params["company_ids"] == ["company-1"]
+
+    async def test_query_source_directors_executes(self, tsa_stub):
+        rows = await tsa_stub.query_source_directors(organization_ids=["org-1"])
+        assert rows == []
+        assert "FROM source_directors" in tsa_stub.last_sql
+        assert tsa_stub.last_params["organization_ids"] == ["org-1"]
+
+    async def test_contact_queries_do_not_paginate(self, tsa_stub):
+        """These three deliberately take no offset. Binding one without a
+        matching OFFSET clause is what produced the NameError."""
+        for method, kwargs in (
+            ("query_directors", {"company_ids": ["c"]}),
+            ("query_key_personnel", {"company_ids": ["c"]}),
+            ("query_source_directors", {"organization_ids": ["o"]}),
+        ):
+            await getattr(tsa_stub, method)(**kwargs)
+            sql, params = tsa_stub.calls[-1]
+            assert "LIMIT :limit" in sql
+            assert "OFFSET" not in sql
+            assert "offset" not in params
+
+    async def test_query_directors_returns_rows(self, tsa_stub):
+        tsa_stub.queue("directors", [
+            {"id": "d1", "company_id": "c1", "full_name": "Thabo Mokoena",
+             "email": "thabo@example.co.za", "phone": "0821234567", "equity_percentage": 40},
+        ])
+        rows = await tsa_stub.query_directors(company_ids=["c1"])
+        assert [r["full_name"] for r in rows] == ["Thabo Mokoena"]
+
+
+class TestPaginatedQueriesStillBindOffset:
+    """The four methods that do paginate must keep binding :offset — the C1 fix
+    is a deletion, and deleting too much breaks these silently."""
+
+    async def test_paginated_queries_bind_offset(self, tsa_stub):
+        for method in ("query_tenders", "query_awards", "query_companies", "query_organizations"):
+            await getattr(tsa_stub, method)(limit=10, offset=20)
+            sql, params = tsa_stub.calls[-1]
+            assert "LIMIT :limit OFFSET :offset" in sql
+            assert params["offset"] == 20
+            assert params["limit"] == 10
