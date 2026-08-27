@@ -8,7 +8,7 @@ from typing import Any
 import structlog
 from sqlalchemy import or_, select
 
-from app.utils import MAX_VALID_YEAR, parse_datetime
+from app.utils import parse_datetime
 
 
 def _sanitize(value: Any) -> Any:
@@ -72,6 +72,13 @@ AWARD_INGEST_LOOKBACK_DAYS = 30
 AWARD_INGEST_OVERLAP_DAYS = 3
 AWARD_INGEST_LIMIT = 5_000
 AWARD_INGEST_MAX_PAGES = 20
+
+# Marker stored on awards.date_source. Only "source" means the date came from
+# Tenders-SA; anything else was synthesised and stays in the repair scan.
+DATE_SOURCE_SOURCE = "source"
+DATE_SOURCE_SYNTHESISED = "synthesised"
+# Caps one nightly repair run so the job cannot grow unbounded with the table.
+REPAIR_BATCH_SIZE = 5_000
 
 
 def _supplier_fallback_api_id(supplier: str) -> str:
@@ -382,6 +389,9 @@ async def check_awards_for_watching(backfill: bool = False):
                     raw.get("award_date"), award.source_created_at, award.discovered_at, now,
                 )
                 award.award_date = resolved.value
+                award.date_source = (
+                    DATE_SOURCE_SOURCE if resolved.from_source else DATE_SOURCE_SYNTHESISED
+                )
                 award.bee_level = raw.get("bee_level")
                 award.bee_points = raw.get("bee_points")
                 award.buyer_org_id = tender.buyer_org_id
@@ -471,42 +481,36 @@ async def check_awards_for_watching(backfill: bool = False):
 
 
 async def find_corrupted_award_dates(db=None) -> list[Award]:
-    """Return all awards with NULL, future, or raw-year-corrupted award_date."""
+    """Awards whose date is missing, in the future, or was synthesised.
+
+    Bounded by design. The previous implementation selected every healthy award
+    with a payload, materialised all of them, and filtered in Python by
+    re-parsing the raw JSON year — a full scan of a table that only grows,
+    running nightly.
+
+    date_source records how each award's date was resolved, so a repaired row
+    drops out of this scan permanently and the working set shrinks rather than
+    grows. NULL covers rows written before the column existed; the one-off
+    backfill in app.cli clears those.
+    """
     if db is None:
         async with async_session() as s:
             return await find_corrupted_award_dates(s)
     now = datetime.now(timezone.utc)
-    corrupt = await db.execute(
-        select(Award).where(
+    result = await db.execute(
+        select(Award)
+        .where(
             or_(
                 Award.award_date.is_(None),
                 Award.award_date > now,
+                Award.date_source.is_(None),
+                Award.date_source != DATE_SOURCE_SOURCE,
             )
         )
+        .order_by(Award.discovered_at.desc())
+        .limit(REPAIR_BATCH_SIZE)
     )
-    result: list[Award] = list(corrupt.scalars().all())
-
-    # Also find records whose raw payload has a clearly-corrupt year (> MAX_VALID_YEAR)
-    # even if the stored date was already corrected by a previous recovery run.
-    extras = await db.execute(
-        select(Award).where(
-            Award.raw_payload.isnot(None),
-            Award.award_date.isnot(None),
-            Award.award_date <= now,
-        )
-    )
-    for award in extras.scalars().all():
-        payload = award.raw_payload or {}
-        raw_date = payload.get("award_date") if isinstance(payload, dict) else None
-        if raw_date and isinstance(raw_date, str) and len(raw_date) >= 4:
-            try:
-                raw_year = int(raw_date[:4])
-            except ValueError:
-                continue
-            if raw_year > MAX_VALID_YEAR:
-                result.append(award)
-
-    return result
+    return list(result.scalars().all())
 
 
 async def fix_corrupted_award_dates() -> int:
@@ -531,6 +535,9 @@ async def fix_corrupted_award_dates() -> int:
             recovered = _resolve_award_date(
                 award.raw_payload.get("award_date") if award.raw_payload else None,
                 award.source_created_at, award.discovered_at, now,
+            )
+            award.date_source = (
+                DATE_SOURCE_SOURCE if recovered.from_source else DATE_SOURCE_SYNTHESISED
             )
             if recovered.value != original:
                 award.award_date = recovered.value

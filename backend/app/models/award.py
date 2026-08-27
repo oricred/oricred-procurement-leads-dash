@@ -33,4 +33,7 @@ class Award(Base):
     source: Mapped[str] = mapped_column(String(16), nullable=False, default="tenders_api")
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # How award_date was resolved: "source" when read from Tenders-SA, otherwise
+    # synthesised. Indexed because the nightly repair job scans on it.
+    date_source: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

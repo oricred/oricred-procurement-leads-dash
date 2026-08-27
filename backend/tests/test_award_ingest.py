@@ -6,6 +6,8 @@ shipped — lived here and was invisible precisely because nothing exercised the
 loop from raw award to created opportunity.
 """
 
+from datetime import datetime, timezone
+
 import pytest
 from sqlalchemy import select
 
@@ -15,6 +17,8 @@ from app.models.tender import Tender
 # The two identifiers that the H2 defect conflated.
 TENDER_ROW_UUID = "8f14e45f-ceea-467a-9d1a-1f3f9a0b1c2d"  # TSA t.id, and a.tender_id
 TENDER_REFERENCE = "RFQ-2026-0042"                        # TSA t.tender_id
+
+NOW_UTC = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
 
 @pytest.fixture
@@ -248,3 +252,70 @@ class TestIngestCursor:
         await award_check.check_awards_for_watching()
 
         assert await self._cursor(ingest_env) is None
+
+
+class TestCorruptedDateScan:
+    """Regression guard for the M3 defect.
+
+    find_corrupted_award_dates selected every healthy award with a payload,
+    materialised all of them, and filtered in Python by re-parsing the raw JSON
+    year — a full table scan running nightly and growing forever.
+    """
+
+    @staticmethod
+    async def _seed(session_factory, rows):
+        from app.models.award import Award
+
+        async with session_factory() as db:
+            for i, (date_source, award_date) in enumerate(rows):
+                db.add(Award(
+                    id=f"a{i}", api_id=f"api-{i}", tender_id="t1", supplier_name="S",
+                    discovered_at=NOW_UTC, award_date=award_date, date_source=date_source,
+                    raw_payload={"award_date": "2026-06-01"},
+                ))
+            await db.commit()
+
+    async def test_healthy_awards_are_not_scanned(self, ingest_env):
+        from app.jobs.award_check import find_corrupted_award_dates
+
+        await self._seed(ingest_env, [("source", NOW_UTC)] * 5)
+        async with ingest_env() as db:
+            assert await find_corrupted_award_dates(db) == []
+
+    async def test_synthesised_awards_are_scanned(self, ingest_env):
+        from app.jobs.award_check import find_corrupted_award_dates
+
+        await self._seed(ingest_env, [("source", NOW_UTC), ("synthesised", NOW_UTC)])
+        async with ingest_env() as db:
+            found = await find_corrupted_award_dates(db)
+        assert [a.date_source for a in found] == ["synthesised"]
+
+    async def test_unmarked_awards_are_scanned(self, ingest_env):
+        """Rows written before the column existed, until the CLI backfill runs."""
+        from app.jobs.award_check import find_corrupted_award_dates
+
+        await self._seed(ingest_env, [(None, NOW_UTC)])
+        async with ingest_env() as db:
+            assert len(await find_corrupted_award_dates(db)) == 1
+
+    async def test_the_scan_is_bounded(self, ingest_env, monkeypatch):
+        import app.jobs.award_check as award_check
+
+        monkeypatch.setattr(award_check, "REPAIR_BATCH_SIZE", 3)
+        await self._seed(ingest_env, [("synthesised", NOW_UTC)] * 10)
+        async with ingest_env() as db:
+            assert len(await award_check.find_corrupted_award_dates(db)) == 3
+
+    async def test_ingest_records_provenance(self, ingest_env, tsa_stub, monkeypatch):
+        """A repaired award drops out of the scan permanently."""
+        from sqlalchemy import select as _select
+
+        import app.jobs.award_check as award_check
+        from app.models.award import Award
+
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub))
+        await award_check.check_awards_for_watching()
+
+        async with ingest_env() as db:
+            award = (await db.execute(_select(Award))).scalars().one()
+        assert award.date_source == "source"
