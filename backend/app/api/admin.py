@@ -1,37 +1,46 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from sqlalchemy import select, delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import get_current_user
+from app.clients.base import TSAClient
 from app.database import get_db
+from app.models.failed_api_call import FailedApiCall
 from app.models.filter_config import FilterConfig
 from app.models.job_run import JobRun
-from app.models.failed_api_call import FailedApiCall
-from app.clients.base import TSAClient
 from app.models.user import User
-from app.api.auth import get_current_user
 from app.schemas.auth import UserRead
+from app.services.admin_config import (
+    get_config,
+    mask_secrets,
+    merge_secrets,
+    save_config,
+)
 from app.services.auth import AuthService
 from app.services.qualification import QualificationService
-from app.services.admin_config import (
-    get_config, save_config, get_all_configs,
-    CONFIG_DEFAULTS,
-)
-
-router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
-async def _require_admin(current_user: dict = Depends(get_current_user)):
+async def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
     if current_user.get("role") != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
     return current_user
 
 
+# Applied at the router, not per endpoint. Seven read endpoints had only
+# authentication, so any viewer could read the scoring weights, source
+# configuration, job schedule and dead-letter queue. A router-level dependency
+# cannot be forgotten when a new endpoint is added. Handlers that need the
+# acting user keep `Depends(require_admin)` in their signature — FastAPI caches
+# dependencies per request, so the check still runs once.
+router = APIRouter(dependencies=[Depends(require_admin)])
+
+
 # ── General settings ──
 
 @router.get("/settings")
-async def get_settings(db: AsyncSession = Depends(get_db), _=Depends(_require_admin)):
+async def get_settings(db: AsyncSession = Depends(get_db)):
     from app.config import settings
     return {
         "app_name": settings.app_name,
@@ -43,26 +52,14 @@ async def get_settings(db: AsyncSession = Depends(get_db), _=Depends(_require_ad
 # ── Credentials ──
 
 @router.get("/credentials")
-async def get_credentials(db: AsyncSession = Depends(get_db), _=Depends(_require_admin)):
-    config = await get_config("admin_credentials", db)
-    masked = {}
-    for k, v in config.items():
-        if isinstance(v, str) and v and any(secret in k for secret in ("key", "password", "secret")):
-            masked[k] = v[:4] + "****" if len(v) > 4 else "****"
-        else:
-            masked[k] = v
-    return masked
+async def get_credentials(db: AsyncSession = Depends(get_db)):
+    return mask_secrets(await get_config("admin_credentials", db))
 
 
 @router.put("/credentials")
-async def update_credentials(body: dict, db: AsyncSession = Depends(get_db), current_user: dict = Depends(_require_admin)):
-    config = await get_config("admin_credentials", db)
-    for k in body:
-        if body[k] and not (isinstance(body[k], str) and body[k].startswith("****") and k in config):
-            config[k] = body[k]
-        elif not body[k]:
-            config[k] = ""
-    await save_config("admin_credentials", config, current_user["user_id"], db)
+async def update_credentials(body: dict, db: AsyncSession = Depends(get_db), current_user: dict = Depends(require_admin)):
+    stored = await get_config("admin_credentials", db)
+    await save_config("admin_credentials", merge_secrets(body, stored), current_user["user_id"], db)
     return {"status": "ok"}
 
 
@@ -78,7 +75,7 @@ async def get_filter_config(db: AsyncSession = Depends(get_db)):
 
 
 @router.put("/filter-config")
-async def update_filter_config(config: dict, db: AsyncSession = Depends(get_db), current_user: dict = Depends(_require_admin)):
+async def update_filter_config(config: dict, db: AsyncSession = Depends(get_db), current_user: dict = Depends(require_admin)):
     result = await db.execute(select(FilterConfig).where(FilterConfig.key == "qualification"))
     row = result.scalar_one_or_none()
     if row:
@@ -101,7 +98,7 @@ async def get_sources(db: AsyncSession = Depends(get_db)):
 
 
 @router.put("/sources")
-async def update_sources(body: dict, db: AsyncSession = Depends(get_db), current_user: dict = Depends(_require_admin)):
+async def update_sources(body: dict, db: AsyncSession = Depends(get_db), current_user: dict = Depends(require_admin)):
     await save_config("admin_sources", body, current_user["user_id"], db)
     return {"status": "ok"}
 
@@ -114,7 +111,7 @@ async def get_notifications(db: AsyncSession = Depends(get_db)):
 
 
 @router.put("/notifications")
-async def update_notifications(body: dict, db: AsyncSession = Depends(get_db), current_user: dict = Depends(_require_admin)):
+async def update_notifications(body: dict, db: AsyncSession = Depends(get_db), current_user: dict = Depends(require_admin)):
     await save_config("admin_notifications", body, current_user["user_id"], db)
     return {"status": "ok"}
 
@@ -127,7 +124,7 @@ async def get_scoring(db: AsyncSession = Depends(get_db)):
 
 
 @router.put("/scoring")
-async def update_scoring(body: dict, db: AsyncSession = Depends(get_db), current_user: dict = Depends(_require_admin)):
+async def update_scoring(body: dict, db: AsyncSession = Depends(get_db), current_user: dict = Depends(require_admin)):
     await save_config("admin_scoring", body, current_user["user_id"], db)
     return {"status": "ok"}
 
@@ -140,7 +137,7 @@ async def get_jobs(db: AsyncSession = Depends(get_db)):
 
 
 @router.put("/jobs")
-async def update_jobs(body: dict, db: AsyncSession = Depends(get_db), current_user: dict = Depends(_require_admin)):
+async def update_jobs(body: dict, db: AsyncSession = Depends(get_db), current_user: dict = Depends(require_admin)):
     await save_config("admin_jobs", body, current_user["user_id"], db)
     from app.jobs.scheduler import reload_scheduler
     await reload_scheduler()
@@ -170,7 +167,7 @@ async def get_job_history(limit: int = 50, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/jobs/{job_name}/trigger")
-async def trigger_job(job_name: str, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db), current_user: dict = Depends(_require_admin)):
+async def trigger_job(job_name: str, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db), current_user: dict = Depends(require_admin)):
     from app.jobs.scheduler import run_job
     handlers = {
         "discover_tenders": "app.jobs.discovery:discover_new_tenders",
@@ -197,13 +194,13 @@ async def trigger_job(job_name: str, background_tasks: BackgroundTasks, db: Asyn
 # ── Users ──
 
 @router.get("/users", response_model=list[UserRead])
-async def list_users(db: AsyncSession = Depends(get_db), _=Depends(_require_admin)):
+async def list_users(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).order_by(User.created_at.desc()))
     return result.scalars().all()
 
 
 @router.post("/users", response_model=UserRead)
-async def create_user(body: dict, db: AsyncSession = Depends(get_db), _=Depends(_require_admin)):
+async def create_user(body: dict, db: AsyncSession = Depends(get_db)):
     email = body.get("email", "").strip().lower()
     password = body.get("password", "")
     name = body.get("name", "").strip()
@@ -229,7 +226,7 @@ async def create_user(body: dict, db: AsyncSession = Depends(get_db), _=Depends(
 
 
 @router.put("/users/{user_id}", response_model=UserRead)
-async def update_user(user_id: str, body: dict, db: AsyncSession = Depends(get_db), _=Depends(_require_admin)):
+async def update_user(user_id: str, body: dict, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
@@ -255,7 +252,7 @@ async def update_user(user_id: str, body: dict, db: AsyncSession = Depends(get_d
 
 
 @router.delete("/users/{user_id}")
-async def delete_user(user_id: str, db: AsyncSession = Depends(get_db), current_user: dict = Depends(_require_admin)):
+async def delete_user(user_id: str, db: AsyncSession = Depends(get_db), current_user: dict = Depends(require_admin)):
     if user_id == current_user["user_id"]:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
 
@@ -293,7 +290,7 @@ async def get_failed_api_calls(limit: int = 50, resolved: bool | None = None, db
 
 
 @router.post("/failed-api-calls/{call_id}/retry")
-async def retry_failed_api_call(call_id: str, db: AsyncSession = Depends(get_db), _=Depends(_require_admin)):
+async def retry_failed_api_call(call_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(FailedApiCall).where(FailedApiCall.id == call_id))
     call = result.scalar_one_or_none()
     if not call:

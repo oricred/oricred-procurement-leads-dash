@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Key, Users, Clock, Play, Trash2, Plus, RefreshCw } from 'lucide-react';
-import { admin } from '../services/api';
+import { admin, SECRET_SENTINEL } from '../services/api';
 import type { User } from '../types';
 
 const TABS = [
@@ -66,7 +66,7 @@ function CredentialsTab() {
 
   if (isLoading) return <p className="text-gray-400">Loading...</p>;
 
-  const secrets = ['api_key', 'password', 'secret'];
+  const secrets = ['api_key', 'password', 'secret', 'token'];
   const mondayFields = ['monday_api_key', 'monday_board_id', 'monday_group_id'];
   const tsaFields = ['tsa_api_key', 'tsa_base_url'];
   const smtpFields = ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'email_from'];
@@ -75,17 +75,44 @@ function CredentialsTab() {
     return (
       <div className="space-y-3">
         <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wide">{label}</h3>
-        {keys.map(key => form[key] !== undefined && (
-          <div key={key}>
-            <label className="block text-sm text-gray-300 mb-1">{key}</label>
-            <input
-              type={secrets.some(s => key.includes(s)) ? 'password' : 'text'}
-              value={form[key] as string}
-              onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
-              className="w-full bg-surface-300 border border-surface-400 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500"
-            />
-          </div>
-        ))}
+        {keys.map(key => form[key] !== undefined && (() => {
+          const isSecret = secrets.some(s => key.includes(s));
+          // The server returns SECRET_SENTINEL for any secret that is set, and
+          // treats that exact value on save as "leave unchanged". So an
+          // untouched field is safe to submit, and clearing needs its own control.
+          const isUnchanged = isSecret && form[key] === SECRET_SENTINEL;
+          return (
+            <div key={key}>
+              <label className="block text-sm text-gray-300 mb-1">{key}</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type={isSecret ? 'password' : 'text'}
+                  value={form[key] as string}
+                  onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+                  className="w-full bg-surface-300 border border-surface-400 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500"
+                />
+                {isSecret && form[key] && (
+                  <button
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, [key]: '' }))}
+                    className="shrink-0 px-2.5 py-2 rounded-lg text-xs text-gray-400 hover:text-red-400 hover:bg-surface-300 transition-colors"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              {isSecret && (
+                <p className="mt-1 text-xs text-gray-500">
+                  {isUnchanged
+                    ? 'Set — leave as-is to keep the current value, or type a new one.'
+                    : form[key]
+                      ? 'Will be saved as the new value.'
+                      : 'Not set — will be cleared on save.'}
+                </p>
+              )}
+            </div>
+          );
+        })())}
       </div>
     );
   }
