@@ -41,7 +41,20 @@ class ValueRangeFilter(FilterHandler):
 
 class SectorFilter(FilterHandler):
     async def evaluate(self, tender: Tender, rules: list[dict], db: AsyncSession | None = None) -> FilterResult:
-        cats = [tender.category_id] if tender.category_id else []
+        if not tender.category_id:
+            # Missing data is not disqualifying, matching ValueRangeFilter,
+            # ProvinceFilter and EntityTypeFilter. This filter used to build an
+            # empty category list and fail the any() include test, so every
+            # uncategorised tender was rejected — quietly narrowing discovery in
+            # a way no operator asked for or could see. Set "on_missing": "fail"
+            # on a rule to opt into the strict reading.
+            if any(rule.get("on_missing") == "fail" for rule in rules):
+                return FilterResult(
+                    passed=False, failed_filter="sector", reason="Tender has no category",
+                )
+            return FilterResult(passed=True)
+
+        cats = [tender.category_id]
         for rule in rules:
             if rule.get("type") == "include":
                 if not any(c in rule.get("values", []) for c in cats):

@@ -1,3 +1,5 @@
+import pytest
+
 from app.clients.tsa_db import (
     TENDER_FIELD_MAP,
     _build_award_where,
@@ -81,7 +83,11 @@ class TestBuildTenderWhere:
 
     def test_exclude_categories(self):
         where, params = _build_tender_where({"_exclude_categories": ["cleaning", "catering"]})
-        assert "!= ALL(:_exclude_cats)" in where
+        # NOT EXISTS rather than != ALL on a joined row: the old form excluded a
+        # category row, so a tender in both an included and an excluded category
+        # survived via its other row. See remediation-03 section 4.
+        assert "NOT EXISTS" in where
+        assert "LOWER(tc.canonical_name) = ANY(:_exclude_cats)" in where
         assert params["_exclude_cats"] == ["cleaning", "catering"]
 
     def test_all_filters_combined(self):
@@ -199,3 +205,92 @@ class TestPaginatedQueriesStillBindOffset:
             assert "LIMIT :limit OFFSET :offset" in sql
             assert params["offset"] == 20
             assert params["limit"] == 10
+
+
+class TestOrClausesAreParenthesised:
+    """Regression guard for the L4 defect.
+
+    Clauses are joined with " AND ", and OR binds less tightly, so an
+    unparenthesised OR splits the whole WHERE in half and every other filter is
+    bypassed on one branch.
+    """
+
+    @pytest.mark.parametrize("filters", [
+        {"since": "2026-01-01"},
+        {"until": "2026-01-01"},
+        {"search": "road"},
+        {"category": ["construction"], "province": ["gp"], "since": "2026-01-01"},
+        {"value_min": 1, "value_max": 2, "since": "2026-01-01", "status": ["open"]},
+    ])
+    def test_no_or_sits_at_the_top_level(self, filters):
+        where, _ = _build_tender_where(filters)
+        depth = 0
+        for token in where.split():
+            if token == "OR":
+                assert depth > 0, f"unparenthesised OR in: {where}"
+            depth += token.count("(") - token.count(")")
+
+    def test_since_filter_does_not_swallow_the_others(self):
+        where, _ = _build_tender_where(
+            {"province": ["gp"], "value_min": 500000, "since": "2026-01-01"}
+        )
+        assert where.endswith("(t.publication_date >= :since OR t.created_at >= :since)")
+
+
+class TestCategoryFilteringDoesNotMultiplyRows:
+    """Regression guard for the M5 defect.
+
+    Categories were LEFT JOINed, so a tender in three categories produced three
+    rows and consumed three slots of the page limit — while count_tenders used
+    COUNT(DISTINCT t.id) and disagreed.
+    """
+
+    async def test_query_tenders_does_not_join_categories(self, tsa_stub):
+        await tsa_stub.query_tenders(fields=["tender_id", "title", "category_id"])
+        sql = tsa_stub.last_sql
+        assert "LEFT JOIN tender_category_relations" not in sql
+        assert "(SELECT tc.canonical_name" in sql, "category must come from a subquery"
+
+    async def test_category_filter_uses_exists(self, tsa_stub):
+        await tsa_stub.query_tenders(filters={"category": ["construction"]})
+        assert "EXISTS (SELECT 1 FROM tender_category_relations" in tsa_stub.last_sql
+
+    def test_exclude_uses_not_exists_so_it_excludes_the_tender(self):
+        where, _ = _build_tender_where({"_exclude_categories": ["cleaning"]})
+        assert where.startswith("WHERE NOT EXISTS")
+        assert "!= ALL" not in where
+
+
+class TestPaginationIsDeterministic:
+    """Regression guard for the M4 defect: OFFSET over a non-unique sort column
+    lets tied rows shift across a page boundary between statements."""
+
+    async def test_tender_sort_has_a_unique_tiebreak(self, tsa_stub):
+        await tsa_stub.query_tenders(limit=10, offset=10)
+        assert "ORDER BY t.created_at DESC, t.id DESC" in tsa_stub.last_sql
+
+    @pytest.mark.parametrize("direction,expected", [("asc", "ASC"), ("desc", "DESC")])
+    async def test_award_sort_has_a_unique_tiebreak(self, tsa_stub, direction, expected):
+        await tsa_stub.query_awards(limit=10, offset=10, direction=direction)
+        assert f"NULLS LAST, a.id {expected}" in tsa_stub.last_sql
+
+
+class TestFieldAliasing:
+    """Every column is aliased to the name callers read.
+
+    tc."parentId" previously came back under the key parentId while
+    discovery read parent_id, so Category.parent_id was always NULL.
+    """
+
+    def test_all_fields_branch_aliases_every_column(self):
+        from app.clients.tsa_db import CATEGORY_FIELD_MAP
+
+        select = _map_fields(CATEGORY_FIELD_MAP, None)
+        assert 'tc."parentId" AS parent_id' in select
+        for name in CATEGORY_FIELD_MAP:
+            assert f"AS {name}" in select
+
+    def test_unknown_requested_fields_are_skipped(self):
+        result = _map_fields(TENDER_FIELD_MAP, ["title", "nonexistent"])
+        assert "t.title AS title" in result
+        assert "nonexistent" not in result

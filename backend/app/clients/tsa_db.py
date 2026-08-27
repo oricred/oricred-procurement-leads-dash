@@ -31,7 +31,13 @@ TENDER_FIELD_MAP: dict[str, str] = {
     "published_at": "t.publication_date",
     "buyer_org_id": "t.source_organization_id",
     "buyer_name": "t.source_organization",
-    "category_id": "tc.canonical_name",
+    # Correlated subquery rather than a join: a tender may sit in several
+    # categories, and joining would return it once per category.
+    "category_id": (
+        "(SELECT tc.canonical_name FROM tender_category_relations tcr "
+        "JOIN tender_categories tc ON tc.id = tcr.category_id "
+        "WHERE tcr.tender_id = t.id ORDER BY tc.canonical_name LIMIT 1)"
+    ),
     "ai_title_enriched": "t.ai_title_enriched",
     "ai_title_fixed": "t.ai_title_fixed",
     "ai_confidence": "t.ai_confidence",
@@ -122,16 +128,17 @@ CATEGORY_FIELD_MAP: dict[str, str] = {
 
 
 def _map_fields(field_map: dict[str, str], fields: list[str] | None) -> str:
-    if not fields:
-        return ", ".join(field_map.values())
-    selected = []
-    for f in fields:
-        col = field_map.get(f)
-        if col:
-            selected.append(f"{col} AS {f}")
-    if not selected:
-        return ", ".join(field_map.values())
-    return ", ".join(selected)
+    """Build a SELECT list from our field names.
+
+    Every column is aliased to the name we asked for, including in the
+    all-fields branch: some source columns are quoted camelCase and some are
+    expressions, and an unaliased one comes back under a key no caller reads.
+    """
+    if fields:
+        selected = [f"{field_map[f]} AS {f}" for f in fields if f in field_map]
+        if selected:
+            return ", ".join(selected)
+    return ", ".join(f"{col} AS {name}" for name, col in field_map.items())
 
 
 def _build_tender_where(filters: dict[str, Any] | None) -> tuple[str, dict[str, Any]]:
@@ -161,12 +168,13 @@ def _build_tender_where(filters: dict[str, Any] | None) -> tuple[str, dict[str, 
 
     categories = filters.get("category")
     if categories:
-        if isinstance(categories, list):
-            clauses.append("LOWER(tc.canonical_name) = ANY(:category)")
-            params["category"] = [c.lower() for c in categories]
-        else:
-            clauses.append("LOWER(tc.canonical_name) = :category")
-            params["category"] = categories.lower()
+        values = categories if isinstance(categories, list) else [categories]
+        clauses.append(
+            "EXISTS (SELECT 1 FROM tender_category_relations tcr "
+            "JOIN tender_categories tc ON tc.id = tcr.category_id "
+            "WHERE tcr.tender_id = t.id AND LOWER(tc.canonical_name) = ANY(:category))"
+        )
+        params["category"] = [str(c).lower() for c in values]
 
     value_min = filters.get("value_min")
     if value_min is not None:
@@ -180,7 +188,7 @@ def _build_tender_where(filters: dict[str, Any] | None) -> tuple[str, dict[str, 
 
     since = filters.get("since")
     if since:
-        clauses.append("t.publication_date >= :since OR t.created_at >= :since")
+        clauses.append("(t.publication_date >= :since OR t.created_at >= :since)")
         params["since"] = since
 
     until = filters.get("until")
@@ -224,12 +232,16 @@ def _build_tender_where(filters: dict[str, Any] | None) -> tuple[str, dict[str, 
     # Exclude categories
     exclude_cats = filters.get("_exclude_categories")
     if exclude_cats:
-        if isinstance(exclude_cats, list):
-            clauses.append("LOWER(tc.canonical_name) != ALL(:_exclude_cats)")
-            params["_exclude_cats"] = [c.lower() for c in exclude_cats]
-        else:
-            clauses.append("LOWER(tc.canonical_name) != :_exclude_cats")
-            params["_exclude_cats"] = exclude_cats.lower()
+        values = exclude_cats if isinstance(exclude_cats, list) else [exclude_cats]
+        # NOT EXISTS excludes the tender. The previous != ALL(...) was evaluated
+        # against a joined row, so a tender in both an included and an excluded
+        # category survived via its other row — not what the filter UI promises.
+        clauses.append(
+            "NOT EXISTS (SELECT 1 FROM tender_category_relations tcr "
+            "JOIN tender_categories tc ON tc.id = tcr.category_id "
+            "WHERE tcr.tender_id = t.id AND LOWER(tc.canonical_name) = ANY(:_exclude_cats))"
+        )
+        params["_exclude_cats"] = [str(c).lower() for c in values]
 
     where = " AND ".join(clauses)
     if where:
@@ -421,16 +433,15 @@ class TSADatabase:
         select_cols = _map_fields(TENDER_FIELD_MAP, fields)
         where, params = _build_tender_where(filters)
 
-        # Join with category_relations + categories for category filtering
-        # Left join with source_organizations for entity_type filtering
+        # source_organizations is joined for the entity_type filter. Categories
+        # are handled by subqueries in the field map and WHERE builder, so one
+        # tender yields exactly one row however many categories it has.
         sql = f"""
             SELECT {select_cols}
             FROM tenders t
-            LEFT JOIN tender_category_relations tcr ON tcr.tender_id = t.id
-            LEFT JOIN tender_categories tc ON tc.id = tcr.category_id
             LEFT JOIN source_organizations o ON o.id = t.source_organization_id
             {where}
-            ORDER BY t.created_at DESC
+            ORDER BY t.created_at DESC, t.id DESC
             LIMIT :limit OFFSET :offset
         """
         params["limit"] = limit
@@ -490,10 +501,8 @@ class TSADatabase:
     async def count_tenders(self, filters: dict[str, Any] | None = None) -> int:
         where, params = _build_tender_where(filters)
         sql = f"""
-            SELECT COUNT(DISTINCT t.id)
+            SELECT COUNT(*)
             FROM tenders t
-            LEFT JOIN tender_category_relations tcr ON tcr.tender_id = t.id
-            LEFT JOIN tender_categories tc ON tc.id = tcr.category_id
             LEFT JOIN source_organizations o ON o.id = t.source_organization_id
             {where}
         """
@@ -512,6 +521,7 @@ class TSADatabase:
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         select_cols = _map_fields(AWARD_FIELD_MAP, fields)
+        order = "ASC" if direction.lower() == "asc" else "DESC"
         where, params, join_clause = _build_award_where(filters)
         params["limit"] = limit
         params["offset"] = max(offset, 0)
@@ -521,7 +531,7 @@ class TSADatabase:
             FROM tender_awards a
             {join_clause}
             {where}
-            ORDER BY a.award_date {"ASC" if direction.lower() == "asc" else "DESC"} NULLS LAST
+            ORDER BY a.award_date {order} NULLS LAST, a.id {order}
             LIMIT :limit OFFSET :offset
         """
         async with self._session_factory() as session:
