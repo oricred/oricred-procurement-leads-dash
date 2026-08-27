@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
+import { purgeLegacyCaches } from './services/api';
 import './index.css';
 
 const queryClient = new QueryClient({
@@ -14,6 +15,9 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// Remove pre-H8 service-worker caches holding personal data before rendering.
+void purgeLegacyCaches();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
