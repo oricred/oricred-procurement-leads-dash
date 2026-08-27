@@ -1,10 +1,10 @@
-import structlog
 from datetime import datetime
 from typing import Any
 
 import httpx
+import structlog
 
-from app.services.crm import CRMAdapter, CRMItem, Activity
+from app.services.crm import Activity, CRMAdapter, CRMItem
 
 logger = structlog.get_logger()
 

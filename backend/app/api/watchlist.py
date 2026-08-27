@@ -1,18 +1,23 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import get_current_user
 from app.database import get_db
-from app.models.watchlist import WatchlistItem
-from app.models.tender import Tender
+from app.models.category import Category
 from app.models.opportunity import Opportunity
 from app.models.past_due import PastDueQueue
-from app.models.category import Category
-from app.schemas.watchlist import WatchlistItemRead, WatchlistList, WatchToggleRequest, WatchToggleResponse
+from app.models.tender import Tender
+from app.models.watchlist import WatchlistItem
+from app.schemas.watchlist import (
+    WatchlistItemRead,
+    WatchlistList,
+    WatchToggleRequest,
+    WatchToggleResponse,
+)
 from app.services.award_timing import AwardTimingService
-from app.api.auth import get_current_user
 
 router = APIRouter()
 

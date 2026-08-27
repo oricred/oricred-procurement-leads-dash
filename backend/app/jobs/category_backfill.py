@@ -1,10 +1,11 @@
 """One-time backfill: re-key categories table so Category.id = canonical_name."""
 import asyncio
+
 import structlog
+from sqlalchemy import delete, select
 
 from app.database import async_session
 from app.models.category import Category
-from sqlalchemy import select, delete
 
 logger = structlog.get_logger()
 

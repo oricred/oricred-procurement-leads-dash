@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends
 
+from app.api.admin import router as admin_router
 from app.api.auth import get_current_user
 from app.api.auth import router as auth_router
-from app.api.admin import router as admin_router
 from app.api.awards import router as awards_router
 from app.api.categories import router as cat_router
 from app.api.contacts import router as contacts_router

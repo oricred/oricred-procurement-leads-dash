@@ -7,9 +7,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.awards import router as awards_router
-from app.api.tenders import router as tenders_router
-from app.api.organizations import router as orgs_router
 from app.api.categories import router as categories_router
+from app.api.organizations import router as orgs_router
+from app.api.tenders import router as tenders_router
 from app.api.watchlist import router as watchlist_router
 from app.database import get_db
 from app.schemas.award import AwardItem, AwardsList
@@ -20,7 +20,6 @@ from app.schemas.watchlist import (
     WatchToggleRequest,
     WatchToggleResponse,
 )
-
 
 # ---------------------------------------------------------------------------
 # Schema unit tests

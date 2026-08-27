@@ -1,4 +1,3 @@
-import pytest
 from app.services.funding_suitability import compute_score
 
 

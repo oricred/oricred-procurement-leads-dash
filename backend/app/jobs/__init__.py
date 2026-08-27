@@ -1,5 +1,5 @@
-from app.jobs.discovery import discover_new_tenders
 from app.jobs.award_check import check_awards_for_watching
+from app.jobs.discovery import discover_new_tenders
 from app.jobs.model_refresh import refresh_timing_model
 from app.jobs.tender_backfill import backfill_stub_tenders
 

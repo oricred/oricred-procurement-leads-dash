@@ -1,10 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.buyer_relationship import BuyerRelationship
 from app.models.award import Award
+from app.models.buyer_relationship import BuyerRelationship
 from app.models.opportunity import Opportunity, OpportunityAudit
 from app.models.tender import Tender
 

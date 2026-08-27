@@ -1,16 +1,16 @@
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, func, exists
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.tender import Tender
-from app.models.organization import Organization
 from app.models.category import Category
 from app.models.opportunity import Opportunity
-from app.models.watchlist import WatchlistItem
+from app.models.organization import Organization
 from app.models.past_due import PastDueQueue
+from app.models.tender import Tender
+from app.models.watchlist import WatchlistItem
 from app.schemas.tender import TenderItem, TendersList
 
 router = APIRouter()

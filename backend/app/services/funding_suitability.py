@@ -1,11 +1,11 @@
-from decimal import Decimal
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.company import Company
 from app.models.award import Award
+from app.models.company import Company
 
 
 def compute_score(

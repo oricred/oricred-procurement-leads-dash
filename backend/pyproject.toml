@@ -26,6 +26,14 @@ dependencies = [
 [tool.setuptools.packages.find]
 include = ["app*"]
 
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.16",
+    "mypy>=1.11",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -33,11 +41,45 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
 
+# Staged adoption — see docs/specifications/remediation-07-engineering-hygiene.md §1.2.
+# Stage 1 (enforced now): the rules that catch bugs — F, I, N, and the E rules below.
+# Stage 2 (next): drop E402 by moving misplaced imports, then drop E501 in a single
+#   formatting-only commit recorded in .git-blame-ignore-revs.
+ignore = [
+    "E501",  # line too long — 245 occurrences, deferred to the formatting commit
+    "E402",  # import not at top of file — 30 occurrences in jobs/, deferred with it
+]
+
 [tool.mypy]
-strict = true
 python_version = "3.12"
-disallow_untyped_defs = true
 ignore_missing_imports = true
+
+# Staged adoption — see remediation-07 §1.2. Strict on the modules where a type
+# error is expensive; the rest are silenced and re-enabled one module per PR.
+disallow_untyped_defs = false
+strict = false
+
+[[tool.mypy.overrides]]
+module = [
+    "app.clients.*",
+    "app.workflow",
+    "app.utils",
+]
+strict = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "app.api.*",
+    "app.models.*",
+    "app.services.*",
+    "app.jobs.*",
+    "app.schemas.*",
+    "app.main",
+    "app.database",
+    "app.config",
+]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
