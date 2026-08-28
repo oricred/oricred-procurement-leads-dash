@@ -135,6 +135,35 @@ oricred/
 - **Tenders-SA DB (TSADatabase)**: This is an external PostgreSQL database provided by Tenders-SA. It is **STRICTLY READ-ONLY**. No INSERT, UPDATE, DELETE, ALTER, DROP, or any other write operations are ever permitted against this database. The `TSADatabase` client only issues SELECT queries. Violating this will break the data source agreement.
 - When in doubt about which database a piece of code operates on, check the import path: `app.database` = oricred DB, `app.clients.tsa_db` = Tenders-SA read-only DB.
 
+### No live database is reachable from a development machine
+
+**By design.** Neither the production Oricred PostgreSQL nor the Tenders-SA
+database accepts connections from a development environment, and running a dev
+server does not change that — the dev server still cannot see them. The only
+database present locally is the SQLite file at `backend/oricred.db`, whose
+contents are unrelated to production.
+
+Consequences, and they are not negotiable by trying harder locally:
+- **Any diagnostic that needs real data runs on the production host**, with that
+  host's `.env`. That covers `scripts/diagnose_login.py`,
+  `scripts/diagnose_jobs.py`, `python -m app.cli list-users`,
+  `python -m app.cli audit-orphans`, and the two checks still open in
+  remediation-07 §5 (the orphan audit and
+  `SELECT MAX(LENGTH(id)) FROM source_organizations`).
+- **Getting a script to production means committing and pushing it**, then
+  checking the branch out on that host. There is no other path — do not offer to
+  "just run it here first".
+- **Local job failures prove nothing about production.** A dev run of any
+  ingestion job fails at `TSADatabase()` because `ORICRED_TSA_DATABASE_URL` is
+  unset; that is the expected local result, not a reproduction of a production
+  fault.
+- **Tests never touch a live database.** They run against SQLite fixtures in
+  `backend/tests/conftest.py`. A test that would need the Tenders-SA DB is a test
+  that needs a fake.
+
+When production evidence is required, write the read-only script, push it, and
+ask for its output — do not infer the answer from the local SQLite file.
+
 ## Key Conventions
 - **Env prefix**: `ORICRED_` for all settings (e.g. `ORICRED_DATABASE_URL`, `ORICRED_JWT_SECRET`)
 - **DB**: PostgreSQL 16 (prod) / SQLite + aiosqlite (dev), auto-creates tables via `Base.metadata.create_all`
