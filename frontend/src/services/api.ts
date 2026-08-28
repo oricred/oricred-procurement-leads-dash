@@ -72,10 +72,11 @@ export const auth = {
 };
 
 export const opportunities = {
-  list: (stage?: Stage) =>
-    api.get<{ items: Opportunity[]; total: number }>('/opportunities', {
-      params: stage ? { stage } : {},
-    }),
+  list: (params?: { stage?: Stage; page?: number; page_size?: number }) =>
+    api.get<{ items: Opportunity[]; total: number; page: number; page_size: number }>(
+      '/opportunities',
+      { params: params ?? {} },
+    ),
   get: (id: string) =>
     api.get<Opportunity>(`/opportunities/${id}`),
   transition: (id: string, body: { action: string; version: number; changed_by?: string; lost_reason?: string; credit_decision?: string; confirm?: boolean; conditions_checklist?: Array<Record<string, unknown>> }) =>
@@ -94,7 +95,10 @@ export const opportunities = {
 
 export const leads = {
   list: (params?: Record<string, unknown>) =>
-    api.get<{ items: Opportunity[]; total: number }>('/leads', { params }),
+    api.get<{ items: Opportunity[]; total: number; page: number; page_size: number }>(
+      '/leads',
+      { params },
+    ),
   export: (params?: Record<string, unknown>) =>
     api.get<Blob>('/leads/export', { params, responseType: 'blob' }),
   previewContactImport: (file: File) => {

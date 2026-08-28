@@ -109,11 +109,23 @@ export default function PipelinePage() {
   const [declining, setDeclining] = useState<Opportunity | null>(null);
   const [dndError, setDndError] = useState<string | null>(null);
 
+  // The endpoint is now paginated, so the board asks for one large page and
+  // says so when there are more. Fetching per column would be better still, but
+  // it means moving cards between two caches in the optimistic drag update —
+  // see remediation-04 section 4.3.
+  const BOARD_PAGE_SIZE = 500;
+
   const { data, isLoading } = useQuery({
     queryKey: ['opportunities'],
-    queryFn: async () => (await opportunities.list()).data,
-    refetchInterval: 15_000,
+    queryFn: async () => (await opportunities.list({ page_size: BOARD_PAGE_SIZE })).data,
+    // 15s was never a product requirement — award ingest runs every 30 minutes.
+    // Pausing while the tab is hidden, plus refetch on focus, is strictly more
+    // responsive to where the operator actually is.
+    refetchInterval: () => (document.visibilityState === 'visible' ? 60_000 : false),
+    refetchOnWindowFocus: true,
   });
+
+  const truncated = data ? data.total > data.items.length : false;
 
   useEffect(() => {
     const id = searchParams.get('open');
@@ -248,6 +260,12 @@ export default function PipelinePage() {
         <>
           {dndError && (
             <div className="mb-3 rounded bg-red-500/10 px-3 py-2 text-sm text-red-300">{dndError}</div>
+          )}
+          {truncated && (
+            <div className="mb-3 rounded bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+              Showing the {data!.items.length} highest-priority of {data!.total} leads.
+              Use the Lead Inbox to filter the rest.
+            </div>
           )}
           <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 xl:grid-cols-5">

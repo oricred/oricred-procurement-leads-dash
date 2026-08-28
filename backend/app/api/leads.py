@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.opportunities import _batch_load_opportunity_context, _opportunity_to_read
@@ -19,6 +19,9 @@ from app.workflow import LEGACY_STAGE_MAP, normalize_stage
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
+# The export is a deliberate full extract rather than a page, but it is still
+# built entirely in memory, so it needs a ceiling of its own.
+EXPORT_ROW_LIMIT = 50_000
 
 
 @router.get("", response_model=OpportunityList)
@@ -35,6 +38,8 @@ async def list_leads(
     value_min: float | None = Query(None),
     award_recency_days: int | None = Query(None, ge=1),
     search: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
     q = (
@@ -86,12 +91,13 @@ async def list_leads(
         Opportunity.created_at.desc(),
     )
 
-    result = await db.execute(q)
+    total = await db.scalar(select(func.count()).select_from(q.subquery())) or 0
+    result = await db.execute(q.offset((page - 1) * page_size).limit(page_size))
     opportunities = result.scalars().all()
     context = await _batch_load_opportunity_context(opportunities, db)
 
     items = [_opportunity_to_read(opp, **context[opp.id]) for opp in opportunities]
-    return OpportunityList(items=items, total=len(items))
+    return OpportunityList(items=items, total=total, page=page, page_size=page_size)
 
 
 @router.get("/export")
@@ -124,8 +130,18 @@ async def export_leads(
         value_min,
         award_recency_days,
         search,
-        db,
+        page=1,
+        page_size=EXPORT_ROW_LIMIT,
+        db=db,
     )
+    if leads.total > EXPORT_ROW_LIMIT:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"That filter matches {leads.total:,} leads. "
+                f"Narrow it to {EXPORT_ROW_LIMIT:,} or fewer."
+            ),
+        )
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)
     writer.writerow(

@@ -83,5 +83,9 @@ class OpportunityContactedUpdate(BaseModel):
 
 class OpportunityList(BaseModel):
     items: list[OpportunityRead]
+    # Number of matching rows, not the number returned. Matches AwardsList and
+    # TendersList so the frontend paging helpers are shared.
     total: int
+    page: int = 1
+    page_size: int = 100
 

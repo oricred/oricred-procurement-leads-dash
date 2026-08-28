@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
@@ -186,8 +186,15 @@ def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: 
 async def list_opportunities(
     stage: str | None = Query(None),
     assigned_to: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
+    """Opportunities, newest and highest-priority first.
+
+    Paginated: this returned every matching row with full nested context, and
+    the pipeline board polled it every 15 seconds.
+    """
     q = select(Opportunity)
     if stage:
         stage = normalize_stage(stage)
@@ -199,12 +206,13 @@ async def list_opportunities(
         q = q.where(Opportunity.assigned_to == assigned_to)
     q = q.order_by(Opportunity.lead_priority_score.desc().nulls_last(), Opportunity.buyer_preference_score.desc().nulls_last(), Opportunity.updated_at.desc())
 
-    result = await db.execute(q)
+    total = await db.scalar(select(func.count()).select_from(q.subquery())) or 0
+    result = await db.execute(q.offset((page - 1) * page_size).limit(page_size))
     opportunities = result.scalars().all()
     context = await _batch_load_opportunity_context(opportunities, db)
 
     items = [_opportunity_to_read(opp, **context[opp.id]) for opp in opportunities]
-    return OpportunityList(items=items, total=len(items))
+    return OpportunityList(items=items, total=total, page=page, page_size=page_size)
 
 
 @router.post("/{opportunity_id}/transition", response_model=OpportunityRead)

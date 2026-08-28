@@ -25,7 +25,11 @@ class HistoricalContactRead(BaseModel):
 
 class HistoricalContactList(BaseModel):
     items: list[HistoricalContactRead]
+    # Number of matching rows, not the number returned — matches AwardsList and
+    # TendersList, so the frontend paging helpers are shared.
     total: int
+    page: int = 1
+    page_size: int = 100
 
 
 
