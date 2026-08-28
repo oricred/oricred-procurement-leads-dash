@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -35,9 +35,31 @@ class AuthService:
 
     @staticmethod
     async def authenticate(db: AsyncSession, email: str, password: str) -> User | None:
-        result = await db.execute(select(User).where(User.email == email))
-        user = result.scalar_one_or_none()
-        if user and AuthService.verify_password(password, user.hashed_password):
+        """Look the user up the way every write path stores them.
+
+        `cli.create_admin`, `_bootstrap_admin` and the admin Users API all
+        write `email.strip().lower()`. Login compared the raw form input
+        against that, so an address the browser autocapitalised or autofilled
+        with a trailing space was rejected with a correct password. Match
+        case-insensitively as well, in case a row predating that normalisation
+        is still stored mixed-case.
+
+        An account that has been deactivated is refused here rather than being
+        handed a token that `get_current_user` rejects on the next request —
+        that bounced the user straight back to the login screen.
+        """
+        normalized = email.strip().lower()
+        result = await db.execute(
+            select(User).where(func.lower(User.email) == normalized).limit(2)
+        )
+        candidates = result.scalars().all()
+        # Two rows differing only by case is an ambiguity we do not resolve
+        # silently; only an exact match on the normalised address counts.
+        if len(candidates) == 1:
+            user = candidates[0]
+        else:
+            user = next((u for u in candidates if u.email == normalized), None)
+        if user and user.is_active and AuthService.verify_password(password, user.hashed_password):
             return user
         return None
 

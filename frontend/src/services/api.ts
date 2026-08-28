@@ -54,13 +54,33 @@ export async function clearApiCaches(): Promise<void> {
   }
 }
 
+/**
+ * Requests where a 401 is the answer to the question asked, not a dead session.
+ *
+ * Signing in with the wrong password *is* a 401. Treating it as an expired
+ * session reloaded the page out from under the login form: the error rendered,
+ * then clearApiCaches() settled a tick later and navigated, wiping the message
+ * and the typed address before either could be read. The reported symptom was
+ * "it says invalid, then the login page reloads" — and the reload is what made
+ * the real cause impossible to see.
+ */
+const AUTHENTICATING_PATHS = ['/auth/login'];
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('token');
+    if (error.response?.status !== 401) {
+      return Promise.reject(error);
+    }
+    const url: string = error.config?.url ?? '';
+    localStorage.removeItem('token');
+    if (!AUTHENTICATING_PATHS.some((path) => url.includes(path))) {
       void clearApiCaches().finally(() => {
-        window.location.href = '/login';
+        // Already on the login page: navigating there again only discards
+        // whatever the form is holding.
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
       });
     }
     return Promise.reject(error);
