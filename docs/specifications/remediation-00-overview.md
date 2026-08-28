@@ -1,9 +1,17 @@
 # Remediation Phase — Overview
 
-**Date:** 2026-08-27
-**Status:** Draft
+**Date:** 2026-08-27 (status updated 2026-08-28)
+**Status:** 32 of 34 findings implemented
 **Source:** Full application review at commit `9de20fd`
 **Depends on:** Phase 2b (current shipped state)
+
+> **Implementation status.** Specs 01, 02, 03, 05 and 06 are complete. Spec 04
+> is complete except for two per-company aggregate queries in the award ingest
+> loop and per-column fetching on the pipeline board. Spec 07 is complete except
+> §5 (foreign keys and column widths), which is blocked on production data.
+>
+> Delivered across two branches: `remediation/incident-response` (the critical
+> and high-severity work) and `remediation/ingestion-and-performance`.
 
 ---
 
@@ -25,15 +33,15 @@ orders them by damage prevented per hour of work, which is not the same as sever
 
 All 34 findings from the review, grouped as follows.
 
-| Spec | Title | Findings covered |
-|------|-------|------------------|
-| [01](remediation-01-contact-enrichment-restoration.md) | Contact Enrichment Restoration | C1, H3, M8, M12 |
-| [02](remediation-02-security-hardening.md) | Security Hardening | C3, C4, C5, H7, H8, M11 |
-| [03](remediation-03-ingestion-correctness.md) | Ingestion Correctness | H1, H2, M4, M5, M10, L4 |
-| [04](remediation-04-query-performance.md) | Query Performance | M1, M2, M3, M6, M7 |
-| [05](remediation-05-integrations-and-delivery.md) | Integrations & Delivery | H6, L5, L6, L7, L9 |
-| [06](remediation-06-import-and-export.md) | Import & Export Robustness | H4, H5, M9 |
-| [07](remediation-07-engineering-hygiene.md) | Engineering Hygiene | L1, L2, L3, L8, L10 |
+| Spec | Title | Findings covered | Status |
+|------|-------|------------------|--------|
+| [01](remediation-01-contact-enrichment-restoration.md) | Contact Enrichment Restoration | C1, H3, M8, M12 | done |
+| [02](remediation-02-security-hardening.md) | Security Hardening | C3, C4, C5, H7, H8, M11 | done |
+| [03](remediation-03-ingestion-correctness.md) | Ingestion Correctness | H1, H2, M4, M5, M10, L4 | done |
+| [04](remediation-04-query-performance.md) | Query Performance | M1, M2, M3, M6, M7 | done, two follow-ups noted |
+| [05](remediation-05-integrations-and-delivery.md) | Integrations & Delivery | H6, L5, L6, L7, L9 | done |
+| [06](remediation-06-import-and-export.md) | Import & Export Robustness | H4, H5, M9 | done |
+| [07](remediation-07-engineering-hygiene.md) | Engineering Hygiene | L1, L2, L3, L8, L10 | L10 outstanding |
 
 ### 1.2 Out of scope
 
@@ -150,6 +158,33 @@ The three call sites that must change under this rule are listed in their owning
 `lead_service.py` (spec 01 §2).
 
 ---
+
+## 4a. Corrections to these specs
+
+Two things written here turned out to be wrong once the code was in hand. Both
+are recorded rather than quietly edited, because a spec that silently rewrites
+itself is as untrustworthy as one that goes stale.
+
+- **Spec 07 §3.3 said implementing `RiskExclusionFilter` would be cheap**,
+  because `Company.restricted_supplier` already exists. It is not implementable
+  at all: qualification runs against a *tender* at discovery time, before any
+  supplier is known, and restricted-supplier status belongs to the awarded
+  company. Both that filter and `BEEFilter` were removed instead. Supplier risk
+  is already applied where the data exists — `compute_lead_priority` scores a
+  restricted supplier at zero.
+- **Spec 04 §2 attributed the award ingest's seven-queries-per-award to the
+  upsert lookups.** Batching those took a 40-award run from 285 local queries to
+  86, but most of the remainder turned out to come from the *scoring* services,
+  including a fresh load of the admin scoring config for every opportunity.
+  Those are now passed the entities the loop already holds. Two genuine
+  per-company aggregates remain.
+
+Three defects were also found that the review missed entirely, all surfaced by
+tests written for something else: `published_at` was passed unparsed on tender
+insert; `Category.parent_id` had always been NULL because `_map_fields` returned
+unaliased column names; and the category exclude filter excluded a category row
+rather than a tender, so a tender in both an included and an excluded category
+survived.
 
 ## 5. Phase acceptance criteria
 

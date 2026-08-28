@@ -1,11 +1,11 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.award import Award
 from app.models.company import Company
+from app.services.award_history import AwardHistory, load_one
 from app.utils import as_utc
 
 
@@ -47,21 +47,26 @@ def compute_score(
 async def compute_funding_suitability(
     company_id: str,
     db: AsyncSession,
+    company: Company | None = None,
+    history: AwardHistory | None = None,
 ) -> float:
-    result = await db.execute(
-        select(Company).where(Company.id == company_id)
-    )
-    company = result.scalar_one_or_none()
+    """Score a supplier's suitability for funding.
+
+    `company` and `history` may be supplied by a caller that already holds
+    them. The award ingest loop does, and passing both removes two queries per
+    new lead — see remediation-04 section 2.
+    """
+    if company is None:
+        result = await db.execute(
+            select(Company).where(Company.id == company_id)
+        )
+        company = result.scalar_one_or_none()
     if not company:
         return 0.0
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=365)
-    agg_result = await db.execute(
-        select(func.sum(Award.amount))
-        .where(Award.supplier_company_id == company.api_id)
-        .where(Award.award_date >= cutoff)
-    )
-    total_value = agg_result.scalar() or Decimal("0")
+    if history is None:
+        history = await load_one(company.api_id, db)
+    total_value = history.value_last_12m
 
     age_days = None
     created_at = as_utc(company.created_at)

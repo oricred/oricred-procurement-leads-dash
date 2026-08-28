@@ -13,7 +13,7 @@ from app.models.opportunity import Opportunity
 from app.models.tender import Tender
 from app.services.admin_config import get_config
 from app.services.crm import CRMAdapter
-from app.services.crm.monday import MondayDotComAdapter
+from app.services.crm.monday import CRMError, MondayDotComAdapter, validate_board_id
 from app.workflow import WORKFLOW_STAGE_LABELS, normalize_stage
 
 logger = structlog.get_logger()
@@ -31,10 +31,17 @@ async def _get_adapter(db: AsyncSession) -> CRMAdapter | None:
 
 
 async def _get_board_config(db: AsyncSession) -> tuple[str, str]:
+    """Resolve the board and group, validating the board ID at one choke point.
+
+    Raises CRMError when the board ID is missing or non-numeric, so the caller
+    can treat it as "not configured" rather than letting it surface as an opaque
+    GraphQL syntax error on every push.
+    """
     creds = await get_config("admin_credentials", db)
-    board_id = creds.get("monday_board_id", "oricred_opportunities")
-    group_id = creds.get("monday_group_id", "main")
-    return board_id, group_id
+    return (
+        validate_board_id(creds.get("monday_board_id", "")),
+        creds.get("monday_group_id", "main"),
+    )
 
 
 async def push_opportunity_to_crm(opportunity_id: str) -> None:
@@ -43,7 +50,12 @@ async def push_opportunity_to_crm(opportunity_id: str) -> None:
         if not adapter:
             return
 
-        board_id, group_id = await _get_board_config(db)
+        try:
+            board_id, group_id = await _get_board_config(db)
+        except CRMError as exc:
+            logger.warning("crm_not_configured", error=str(exc))
+            await adapter.close()
+            return
 
         result = await db.execute(
             select(Opportunity).where(Opportunity.id == opportunity_id)
@@ -101,8 +113,9 @@ async def push_opportunity_to_crm(opportunity_id: str) -> None:
                 column_values["text7"] = " | ".join(contact_parts)
 
         if opp.crm_item_id:
-            for col_id, value in column_values.items():
-                await adapter.update_column_value(opp.crm_item_id, col_id, value)
+            # One request for the whole item. This was a loop issuing one HTTP
+            # round trip per column, up to seven per opportunity.
+            await adapter.update_columns(board_id, opp.crm_item_id, column_values)
             logger.info("crm_opportunity_updated", opportunity_id=opportunity_id)
         else:
             item_id = await adapter.create_item(
@@ -117,12 +130,23 @@ async def push_opportunity_to_crm(opportunity_id: str) -> None:
 
 
 async def pull_crm_activity(since: datetime | None = None) -> None:
+    """Fetch recent Monday.com activity.
+
+    Currently logs and discards — inbound sync is not implemented. See
+    remediation-05 section 8. The sync_crm job that calls this is disabled by
+    default until it does something with the result.
+    """
     async with async_session() as db:
         adapter = await _get_adapter(db)
         if not adapter:
             return
 
-        board_id, _ = await _get_board_config(db)
+        try:
+            board_id, _ = await _get_board_config(db)
+        except CRMError as exc:
+            logger.warning("crm_not_configured", error=str(exc))
+            await adapter.close()
+            return
 
         if since is None:
             since = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)

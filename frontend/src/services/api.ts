@@ -54,13 +54,33 @@ export async function clearApiCaches(): Promise<void> {
   }
 }
 
+/**
+ * Requests where a 401 is the answer to the question asked, not a dead session.
+ *
+ * Signing in with the wrong password *is* a 401. Treating it as an expired
+ * session reloaded the page out from under the login form: the error rendered,
+ * then clearApiCaches() settled a tick later and navigated, wiping the message
+ * and the typed address before either could be read. The reported symptom was
+ * "it says invalid, then the login page reloads" — and the reload is what made
+ * the real cause impossible to see.
+ */
+const AUTHENTICATING_PATHS = ['/auth/login'];
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('token');
+    if (error.response?.status !== 401) {
+      return Promise.reject(error);
+    }
+    const url: string = error.config?.url ?? '';
+    localStorage.removeItem('token');
+    if (!AUTHENTICATING_PATHS.some((path) => url.includes(path))) {
       void clearApiCaches().finally(() => {
-        window.location.href = '/login';
+        // Already on the login page: navigating there again only discards
+        // whatever the form is holding.
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
       });
     }
     return Promise.reject(error);
@@ -97,7 +117,10 @@ export const opportunities = {
 
 export const leads = {
   list: (params?: Record<string, unknown>) =>
-    api.get<{ items: Opportunity[]; total: number }>('/leads', { params }),
+    api.get<{ items: Opportunity[]; total: number; page: number; page_size: number }>(
+      '/leads',
+      { params },
+    ),
   export: (params?: Record<string, unknown>) =>
     api.get<Blob>('/leads/export', { params, responseType: 'blob' }),
   previewContactImport: (file: File) => {
@@ -140,19 +163,17 @@ export const dashboard = {
  */
 export const SECRET_SENTINEL = '•'.repeat(12);
 
+/**
+ * Only what the Admin page actually calls.
+ *
+ * Client functions for the Filters, Sources, Notifications and Scoring tabs
+ * were removed here when those tabs were dropped in a515055 — the endpoints
+ * still exist, so add them back alongside a UI that uses them rather than
+ * keeping callers-of-nothing around.
+ */
 export const admin = {
-  getFilterConfig: () => api.get('/admin/filter-config'),
-  updateFilterConfig: (config: Record<string, unknown>) =>
-    api.put('/admin/filter-config', config),
-  getSettings: () => api.get('/admin/settings'),
   getCredentials: () => api.get('/admin/credentials'),
   updateCredentials: (body: Record<string, string>) => api.put('/admin/credentials', body),
-  getSources: () => api.get('/admin/sources'),
-  updateSources: (body: Record<string, unknown>) => api.put('/admin/sources', body),
-  getNotifications: () => api.get('/admin/notifications'),
-  updateNotifications: (body: Record<string, unknown>) => api.put('/admin/notifications', body),
-  getScoring: () => api.get('/admin/scoring'),
-  updateScoring: (body: Record<string, unknown>) => api.put('/admin/scoring', body),
   getJobs: () => api.get('/admin/jobs'),
   updateJobs: (body: Record<string, unknown>) => api.put('/admin/jobs', body),
   getJobHistory: (limit = 50) => api.get('/admin/jobs/history', { params: { limit } }),
@@ -163,13 +184,6 @@ export const admin = {
   updateUser: (userId: string, body: Record<string, string>) =>
     api.put<User>(`/admin/users/${userId}`, body),
   deleteUser: (userId: string) => api.delete(`/admin/users/${userId}`),
-  getFailedApiCalls: (resolved?: boolean) =>
-    api.get<{ items: Array<{ id: string; endpoint: string; method?: string; error: string; attempts: number; failed_at: string; resolved: boolean }> }>(
-      '/admin/failed-api-calls',
-      { params: resolved !== undefined ? { resolved } : {} },
-    ),
-  retryFailedApiCall: (callId: string) =>
-    api.post<{ status: string; message: string }>(`/admin/failed-api-calls/${callId}/retry`),
 };
 
 export const buyerRelationships = {

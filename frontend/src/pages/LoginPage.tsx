@@ -1,5 +1,6 @@
 import { useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import { auth } from '../services/api';
 import { TrendingUp } from 'lucide-react';
 
@@ -13,11 +14,24 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
     try {
-      const res = await auth.login(email, password);
+      // Every path that stores a user writes the address stripped and
+      // lowercased, so send it in that form. The backend normalises too; this
+      // just keeps what is shown and what is sent identical.
+      const res = await auth.login(email.trim().toLowerCase(), password);
       localStorage.setItem('token', res.data.access_token);
       navigate('/pipeline');
-    } catch {
-      setError('Invalid credentials');
+    } catch (err) {
+      // Only a 401 means the credentials were wrong. Reporting a server fault
+      // or an unreachable API as "Invalid credentials" sent people off
+      // retyping a password that was correct all along.
+      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+      if (status === 401) {
+        setError('Invalid credentials');
+      } else if (status) {
+        setError(`Sign-in failed (server responded ${status}). Please try again.`);
+      } else {
+        setError('Could not reach the server. Check your connection and try again.');
+      }
     }
   };
 
@@ -47,6 +61,10 @@ export default function LoginPage() {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               className="w-full px-3 py-2 bg-surface-300 border border-surface-400 rounded-lg text-gray-100 placeholder-gray-500 focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500/20"
               placeholder="you@example.com"
               required
@@ -59,6 +77,7 @@ export default function LoginPage() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
               className="w-full px-3 py-2 bg-surface-300 border border-surface-400 rounded-lg text-gray-100 placeholder-gray-500 focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500/20"
               placeholder="••••••••"
               required

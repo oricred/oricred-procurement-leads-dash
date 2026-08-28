@@ -118,7 +118,11 @@ export default function PipelinePage() {
     queries: allPhases.map(([phase, stages]) => ({
       queryKey: ['opportunities', phase],
       queryFn: async () => (await opportunities.list({ stage: stages, limit: PHASE_LIMIT, offset: 0 })).data,
-      refetchInterval: 15_000,
+      // Seven columns polling at once, so pause while the tab is hidden and
+      // refetch on focus instead. Award ingest runs every 30 minutes; 15s was
+      // never a product requirement.
+      refetchInterval: () => (document.visibilityState === 'visible' ? 60_000 : false),
+      refetchOnWindowFocus: true,
     })),
   });
   const itemsByPhase = Object.fromEntries(
@@ -140,6 +144,7 @@ export default function PipelinePage() {
     queryFn: async () => (await opportunities.get(openId as string)).data,
     enabled: Boolean(openId) && !loadedOpen,
   });
+
 
   useEffect(() => {
     if (!openId) return;

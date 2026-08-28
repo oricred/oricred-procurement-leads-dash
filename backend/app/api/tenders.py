@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import exists, func, select
+from sqlalchemy import case, exists, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -16,38 +16,62 @@ from app.schemas.tender import TenderItem, TendersList
 router = APIRouter()
 
 
-async def _compute_status_for_tender(tender_id: str, db: AsyncSession) -> tuple[str, bool, str | None]:
-    opp = await db.execute(
-        select(Opportunity.id).where(
-            Opportunity.tender_id == tender_id,
-            Opportunity.company_id.isnot(None),
-        ).limit(1)
-    )
-    opp_id = opp.scalar_one_or_none()
-    if opp_id:
-        return ("opportunity", False, str(opp_id))
+def _status_columns() -> tuple:
+    """Tender status, watch flag and linked opportunity, computed in SQL.
 
-    wl = await db.execute(
-        select(WatchlistItem.status).where(
-            WatchlistItem.tender_id == tender_id
-        ).limit(1)
-    )
-    wl_row = wl.scalar_one_or_none()
-    if wl_row == "awarded":
-        return ("awarded", True, None)
-    elif wl_row == "watching":
-        return ("watching", True, None)
+    These were three sequential SELECTs per row inside the result loop, so a
+    50-row page cost up to 151 round trips. The correlated-EXISTS form already
+    existed in _apply_status_filter below; this is the same logic projected
+    rather than filtered.
 
-    pd = await db.execute(
-        select(PastDueQueue.id).where(
-            PastDueQueue.tender_id == tender_id,
+    Precedence must match the original helper exactly: opportunity, then
+    awarded, then watching, then past due, then not watched. Note that
+    is_watching is False for the opportunity and past_due states even when a
+    watchlist row exists — the Tenders page watch toggle depends on that.
+    """
+    opportunity_id = (
+        select(Opportunity.id)
+        .where(Opportunity.tender_id == Tender.id, Opportunity.company_id.isnot(None))
+        .order_by(Opportunity.created_at.desc())
+        .limit(1)
+        .correlate(Tender)
+        .scalar_subquery()
+    )
+    watch_status = (
+        select(WatchlistItem.status)
+        .where(WatchlistItem.tender_id == Tender.id)
+        .limit(1)
+        .correlate(Tender)
+        .scalar_subquery()
+    )
+    past_due_id = (
+        select(PastDueQueue.id)
+        .where(
+            PastDueQueue.tender_id == Tender.id,
+            # A resolved entry is history; only a pending one is a live state.
             PastDueQueue.resolution == "pending",
-        ).limit(1)
+        )
+        .limit(1)
+        .correlate(Tender)
+        .scalar_subquery()
     )
-    if pd.scalar_one_or_none():
-        return ("past_due", False, None)
-
-    return ("not_watched", False, None)
+    status = case(
+        (opportunity_id.isnot(None), literal("opportunity")),
+        (watch_status == "awarded", literal("awarded")),
+        (watch_status == "watching", literal("watching")),
+        (past_due_id.isnot(None), literal("past_due")),
+        else_=literal("not_watched"),
+    )
+    is_watching = case(
+        (opportunity_id.isnot(None), literal(False)),
+        (watch_status.in_(("awarded", "watching")), literal(True)),
+        else_=literal(False),
+    )
+    return (
+        opportunity_id.label("opportunity_id"),
+        status.label("status"),
+        is_watching.label("is_watching"),
+    )
 
 
 def _apply_status_filter(query, status: str):
@@ -141,6 +165,7 @@ async def list_tenders(
             Tender.published_at,
             Tender.tender_type,
             Tender.discovered_at,
+            *_status_columns(),
         )
         .outerjoin(Organization, Tender.buyer_org_id == Organization.id)
         .outerjoin(Category, Tender.category_id == Category.id)
@@ -194,7 +219,6 @@ async def list_tenders(
 
     items = []
     for row in rows:
-        status_val, is_watching, opp_id = await _compute_status_for_tender(str(row.id), db)
         items.append(TenderItem(
             id=str(row.id),
             title=row.title,
@@ -208,9 +232,9 @@ async def list_tenders(
             published_at=row.published_at,
             tender_type=row.tender_type,
             discovered_at=row.discovered_at,
-            status=status_val,
-            is_watching=is_watching,
-            opportunity_id=opp_id,
+            status=row.status,
+            is_watching=bool(row.is_watching),
+            opportunity_id=str(row.opportunity_id) if row.opportunity_id else None,
         ))
 
     return TendersList(items=items, total=total, page=page, page_size=page_size)
