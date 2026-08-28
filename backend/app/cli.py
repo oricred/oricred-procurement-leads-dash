@@ -1,6 +1,8 @@
 """Operator commands.
 
     python -m app.cli create-admin --email ops@oricred.com --name "Ops"
+    python -m app.cli list-users
+    python -m app.cli reset-password --email ops@oricred.com [--activate]
     python -m app.cli backfill-date-source
     python -m app.cli audit-orphans [--fix-safe]
 
@@ -17,7 +19,7 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.database import async_session, init_db
 from app.models.user import User
@@ -48,6 +50,66 @@ async def create_admin(email: str, name: str, password: str) -> None:
         ))
         await db.commit()
     print(f"Created administrator {email}")
+
+
+async def list_users() -> None:
+    """Show who can sign in.
+
+    The first thing to check when someone reports that a correct password is
+    refused: the address is stored lowercased, and an inactive account is
+    refused at login.
+    """
+    async with async_session() as db:
+        users = (await db.execute(select(User).order_by(User.email))).scalars().all()
+
+    if not users:
+        print("No users. Create the first one with: python -m app.cli create-admin")
+        return
+
+    width = max(len(u.email) for u in users)
+    print(f"{'email':<{width}}  {'role':<9}  status")
+    for user in users:
+        print(f"{user.email:<{width}}  {user.role:<9}  {'active' if user.is_active else 'DISABLED'}")
+
+
+async def reset_password(email: str, password: str, activate: bool = False) -> None:
+    """Set a new password on an existing account.
+
+    `create-admin` refuses to run once any user exists, which left a locked-out
+    administrator with no way back in short of editing the database by hand.
+    Like create-admin, the password is read interactively and never appears in
+    argv, shell history, or a process listing.
+    """
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise SystemExit(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
+
+    normalized = email.strip().lower()
+    async with async_session() as db:
+        # Matched case-insensitively for the same reason login is: a row
+        # written before addresses were normalised may be stored mixed-case.
+        user = (await db.execute(
+            select(User).where(func.lower(User.email) == normalized)
+        )).scalars().first()
+        if not user:
+            raise SystemExit(
+                f"No user with address {normalized}. "
+                "Run `python -m app.cli list-users` to see the addresses on file."
+            )
+        user.hashed_password = AuthService.hash_password(password)
+        was_disabled = not user.is_active
+        if was_disabled and activate:
+            user.is_active = True
+        await db.commit()
+        still_disabled = was_disabled and not activate
+
+    print(f"Password updated for {user.email}")
+    if still_disabled:
+        print(
+            "This account is DISABLED and is refused at login. "
+            "Re-run with --activate to enable it."
+        )
+    elif was_disabled:
+        print("Account re-enabled.")
 
 
 async def backfill_date_source(batch_size: int = 5_000) -> None:
@@ -195,6 +257,16 @@ def main(argv: list[str] | None = None) -> None:
     admin_parser.add_argument("--email", required=True)
     admin_parser.add_argument("--name", default="Administrator")
 
+    sub.add_parser("list-users", help="List accounts, their role and whether they are enabled")
+
+    reset_parser = sub.add_parser(
+        "reset-password", help="Set a new password on an existing account"
+    )
+    reset_parser.add_argument("--email", required=True)
+    reset_parser.add_argument(
+        "--activate", action="store_true", help="Also re-enable a disabled account"
+    )
+
     backfill_parser = sub.add_parser(
         "backfill-date-source", help="Populate awards.date_source on existing rows"
     )
@@ -215,6 +287,12 @@ def main(argv: list[str] | None = None) -> None:
         if not sys.stdin.isatty():
             raise SystemExit("create-admin needs an interactive terminal to read the password")
         asyncio.run(create_admin(args.email, args.name, _prompt_password()))
+    elif args.command == "list-users":
+        asyncio.run(list_users())
+    elif args.command == "reset-password":
+        if not sys.stdin.isatty():
+            raise SystemExit("reset-password needs an interactive terminal to read the password")
+        asyncio.run(reset_password(args.email, _prompt_password(), args.activate))
     elif args.command == "backfill-date-source":
         asyncio.run(backfill_date_source(args.batch_size))
     elif args.command == "audit-orphans":

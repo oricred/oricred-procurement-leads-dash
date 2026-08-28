@@ -45,7 +45,7 @@ oricred/
 │   │   ├── clients/
 │   │   │   ├── base.py          # TSAClient — REST HTTP client with retry + dead-letter
 │   │   │   └── tsa_db.py        # TSADatabase — direct PostgreSQL (read-only, filter-driven)
-│   │   ├── cli.py               # create-admin, backfill-date-source
+│   │   ├── cli.py               # create-admin, list-users, reset-password, backfill-date-source, audit-orphans
 │   │   ├── jobs/
 │   │   │   ├── scheduler.py     # JOBS registry (single source for scheduler + Run Now)
 │   │   │   ├── discovery.py     # Tender discovery via TSADatabase SQL filters
@@ -138,7 +138,7 @@ oricred/
 ## Key Conventions
 - **Env prefix**: `ORICRED_` for all settings (e.g. `ORICRED_DATABASE_URL`, `ORICRED_JWT_SECRET`)
 - **DB**: PostgreSQL 16 (prod) / SQLite + aiosqlite (dev), auto-creates tables via `Base.metadata.create_all`
-- **Auth**: JWT with bcrypt, `POST /api/auth/login` returns `access_token`
+- **Auth**: JWT with bcrypt, `POST /api/auth/login` returns `access_token`. Email addresses are stored `.strip().lower()` by every write path, and login normalises and matches case-insensitively — keep both sides in step. Login also refuses an inactive user, so a deactivated account never receives a token that `get_current_user` would reject on the next request.
 - **Models**: UUID string PKs, `DateTime(timezone=True)` for all timestamps
 - **API routes**: All under `/api` prefix, mounted in `app/api/__init__.py`
 - **Schemas**: Pydantic v2 with `from_attributes = True` for ORM mapping
@@ -257,6 +257,30 @@ deleted. Corrupt years now fall through to branch 2 or 3 and are marked
 - `app/jobs/award_check.py` — `_resolve_award_date()`, `fix_corrupted_award_dates()`
 - `app/utils.py` — `parse_datetime()` with `MAX_VALID_YEAR = 2027`
 - `app/database.py` — `_ensure_award_columns()` adds `publication_date`, `date_source`
+
+## Locked out of the admin account
+`create-admin` refuses to run once any user exists, so recovery goes through:
+- `python -m app.cli list-users` — shows every address, its role, and whether it is enabled
+- `python -m app.cli reset-password --email you@example.com [--activate]` — prompts for the
+  new password; `--activate` also re-enables a disabled account
+
+Both need an interactive terminal (the password is never passed in argv), and both
+need the same `.env` the server uses — run them from `backend/`.
+
+If the login page reports a failure for every password, check the server is up
+first: with no `.env`, `assert_production_safe()` refuses to start the app, and a
+login request that never reaches a server is not a credentials problem.
+
+`backend/scripts/diagnose_login.py` (read-only) tells the three causes apart on
+whichever database the environment points at — run it on the API host, with that
+host's environment:
+- no arguments — which database, the signing-key fingerprint, and every account
+  with its address in `repr()` so a stray space or capital is visible
+- `--email … --check-password` — does the password match the stored hash
+- `--token` — paste the token from the browser's localStorage: bad signature
+  (secret rotated, or two instances signing differently), expired, minted against
+  another database, disabled account, or valid — in which case the token is not
+  reaching the API and the reverse proxy is dropping `Authorization`.
 
 ## Tests
 - Located in `backend/tests/`
