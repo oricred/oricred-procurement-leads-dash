@@ -175,6 +175,17 @@ ask for its output — do not infer the answer from the local SQLite file.
 - **Frontend API**: Axios client with Bearer token interceptor, TanStack Query for data fetching
 - **CORS**: `ORICRED_CORS_ORIGINS`, comma-separated. Empty = same-origin only (the standard deployment, since FastAPI serves the SPA); localhost:5173 is added in debug
 - **Stage transition**: Use `POST /opportunities/{id}/transition` (not direct stage PATCH)
+- **Logging**: `app/logging_config.py`, called at import of `app.main` — before
+  `app.database`, so the engine is built with the intended echo setting, and
+  after uvicorn has configured logging, so it overrides whatever uvicorn or a
+  `--log-config` set. It asserts the SQLAlchemy log levels rather than trusting
+  them, and clears any level set on a `sqlalchemy.*` child. `ORICRED_SQL_ECHO`
+  (default false) is the only way to turn statement logging back on; it is
+  deliberately independent of `ORICRED_DEBUG`. Discovery issues 4–6 statements
+  per tender across up to 20,000 tenders every 15 minutes, so the echo is not a
+  debugging convenience at this volume — it filled the production disk in
+  2026-08. Anything logged once per tender belongs at `debug`; log the aggregate
+  at `info` instead, as `tenders_synced` does.
 
 ## Workflow Stages
 ```

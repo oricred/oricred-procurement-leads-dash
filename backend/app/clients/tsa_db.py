@@ -418,7 +418,7 @@ class TSADatabase:
     def __init__(self) -> None:
         self._engine = create_async_engine(
             TSA_DATABASE_URL,
-            echo=False,
+            echo=settings.sql_echo,
             pool_size=5,
             max_overflow=10,
             pool_pre_ping=True,

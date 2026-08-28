@@ -1,3 +1,4 @@
+from collections import Counter
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -50,7 +51,9 @@ TENDER_INGEST_PAGE_SIZE = 1_000
 TENDER_INGEST_MAX_PAGES = 20
 
 
-async def _process_tender(raw: dict, db, now: datetime) -> int:
+async def _process_tender(
+    raw: dict, db, now: datetime, stats: Counter | None = None
+) -> int:
     api_id = raw.get("tender_id")
     if not api_id:
         return 0
@@ -86,11 +89,13 @@ async def _process_tender(raw: dict, db, now: datetime) -> int:
     tender.published_at = parse_datetime(raw.get("publication_date"))
     await db.flush()
 
-    await _qualify_and_watch(tender, db, now)
+    await _qualify_and_watch(tender, db, now, stats)
     return 1
 
 
-async def _process_scraper_tender(result, metro_name: str, db, now: datetime) -> int:
+async def _process_scraper_tender(
+    result, metro_name: str, db, now: datetime, stats: Counter | None = None
+) -> int:
     api_id = f"municipal_{metro_name}_{result.reference}"
     existing = await db.execute(select(Tender).where(Tender.api_id == api_id))
     if existing.scalar_one_or_none():
@@ -125,11 +130,16 @@ async def _process_scraper_tender(result, metro_name: str, db, now: datetime) ->
     db.add(tender)
     await db.flush()
 
-    await _qualify_and_watch(tender, db, now)
+    await _qualify_and_watch(tender, db, now, stats)
     return 1
 
 
-async def _qualify_and_watch(tender: Tender, db, now: datetime) -> int:
+async def _qualify_and_watch(
+    tender: Tender, db, now: datetime, stats: Counter | None = None
+) -> int:
+    # Optional so the helpers stay callable on their own; only the full
+    # discovery pass cares about the totals.
+    stats = Counter() if stats is None else stats
     existing = (
         await db.execute(select(WatchlistItem).where(WatchlistItem.tender_id == tender.id))
     ).scalar_one_or_none()
@@ -140,6 +150,10 @@ async def _qualify_and_watch(tender: Tender, db, now: datetime) -> int:
     qual = QualificationService(db)
     result = await qual.evaluate(tender)
     if not result.passed:
+        # Counted, not logged. Per-tender rejection lines are at debug in
+        # QualificationService; the run summary carries the totals.
+        stats["rejected"] += 1
+        stats[f"reason:{result.reason}"] += 1
         if existing and existing.status != "awarded":
             existing.status = "unqualified"
             existing.expected_window_start = None
@@ -150,6 +164,7 @@ async def _qualify_and_watch(tender: Tender, db, now: datetime) -> int:
             past_due.resolved_at = now
         return 0
 
+    stats["qualified"] += 1
     timing = AwardTimingService(db)
     start, end = await timing.get_expected_window(
         tender.buyer_org_id, tender.category_id, tender.closing_date
@@ -215,6 +230,7 @@ async def discover_new_tenders():
 
         async with async_session() as db:
             count = 0
+            stats: Counter = Counter()
 
             # Persist every currently open Tenders-SA tender. Qualification is
             # applied only after storage to decide whether it should be watched.
@@ -238,7 +254,7 @@ async def discover_new_tenders():
                 raise
 
             for raw in raw_tenders:
-                count += await _process_tender(raw, db, now)
+                count += await _process_tender(raw, db, now, stats)
 
             # ── Discover tenders from municipal scrapers ──
             try:
@@ -268,7 +284,7 @@ async def discover_new_tenders():
                     try:
                         results = await adapter.get_new_tenders(source_since)
                         for res in results:
-                            count += await _process_scraper_tender(res, src_key, db, now)
+                            count += await _process_scraper_tender(res, src_key, db, now, stats)
                         logger.info("source_tenders_fetched", source=src_key, count=len(results))
                     except Exception as e:
                         logger.error("source_fetch_failed", source=src_key, error=str(e))
@@ -282,7 +298,19 @@ async def discover_new_tenders():
                     logger.info("api_source_configured", source=src_key, name=src_name, base_url=src_cfg.get("base_url"))
 
             await db.commit()
-            logger.info("tenders_synced", source="tenders_sa", processed=count, queried=len(raw_tenders))
+            logger.info(
+                "tenders_synced",
+                source="tenders_sa",
+                processed=count,
+                queried=len(raw_tenders),
+                qualified=stats["qualified"],
+                rejected=stats["rejected"],
+                rejection_reasons={
+                    key.removeprefix("reason:"): value
+                    for key, value in stats.most_common()
+                    if key.startswith("reason:")
+                },
+            )
             return count
 
     finally:

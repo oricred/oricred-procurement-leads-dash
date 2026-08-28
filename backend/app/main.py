@@ -6,10 +6,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
-from app.api import router as api_router
 from app.config import assert_production_safe, settings
-from app.database import async_session, init_db
-from app.models.user import User
+from app.logging_config import configure_logging
+
+# Before app.database is imported, so the engine is built with the intended
+# echo setting, and before any logger is bound. uvicorn configures logging and
+# then imports this module, so asserting the levels here overrides whatever it
+# (or a --log-config) set.
+configure_logging()
+
+from app.api import router as api_router  # noqa: E402
+from app.database import async_session, init_db  # noqa: E402
+from app.models.user import User  # noqa: E402
 
 logger = structlog.get_logger()
 

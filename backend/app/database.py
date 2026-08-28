@@ -6,7 +6,7 @@ from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
 
 logger = structlog.get_logger()
-engine = create_async_engine(settings.database_url, echo=False)
+engine = create_async_engine(settings.database_url, echo=settings.sql_echo)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 

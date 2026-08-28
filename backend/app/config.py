@@ -35,6 +35,13 @@ class Settings(BaseSettings):
 
     session_secret: str = ""
 
+    # Logging. sql_echo is deliberately independent of debug: echoing every
+    # statement is what filled the production disk, so it must never be a
+    # side effect of turning debug on. See app/logging_config.py.
+    log_level: str = "INFO"
+    log_json: bool = False
+    sql_echo: bool = False
+
     # Comma-separated allowed browser origins. Empty means same-origin only,
     # which is correct for the standard deployment where FastAPI serves the SPA.
     cors_origins: str = ""
