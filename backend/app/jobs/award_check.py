@@ -279,8 +279,8 @@ async def _mark_overdue_watches(db, email: EmailAlertService, now: datetime) -> 
         if existing.scalar_one_or_none():
             continue
         db.add(PastDueQueue(tender_id=tender.id, entered_queue_at=now))
-        await email.send(
-            "past_due", "ops@oricred.com", tender_title=tender.title,
+        await email.queue(
+            "past_due", tender_title=tender.title,
             buyer_org=tender.buyer_org_id or "", category=tender.category_id or "",
             window_start=str(watch.expected_window_start), window_end=str(watch.expected_window_end),
             days_overdue=str((now - watch.expected_window_end).days), dashboard_url="/watchlist",
@@ -294,11 +294,12 @@ async def check_awards_for_watching(backfill: bool = False):
     the award feed or prevents an awarded supplier from becoming a lead.
     """
     tsa_db = TSADatabase()
-    email = EmailAlertService()
     logger.info("job_started", job="ingest_awards")
 
     try:
         async with async_session() as db:
+            # Recipients and per-event toggles live in Admin -> Notifications.
+            email = await EmailAlertService.from_config(db)
             now = datetime.now(timezone.utc)
             new_opportunity_ids: list[str] = []
             # Only dates we actually read from Tenders-SA. A synthesised date
@@ -427,14 +428,15 @@ async def check_awards_for_watching(backfill: bool = False):
                     if name.lower() != supplier.lower()
                 ] or None
                 new_opportunity_ids.append(str(opp.id))
-                await email.send(
-                    "award_detected", "ops@oricred.com", company_name=supplier,
+                await email.queue(
+                    "award_detected", company_name=supplier,
                     tender_title=tender.title, supplier_name=supplier,
                     amount=float(raw.get("amount", 0) or 0), award_date=str(raw.get("award_date", "")),
                     dashboard_url="/opportunities/" + str(opp.id),
                 )
 
             await _mark_overdue_watches(db, email, now)
+            delivered = await email.flush()
             if source_backed_timestamps:
                 # Never past now, even if the source hands us a future date.
                 latest_award_at = min(max(source_backed_timestamps), now)
@@ -472,7 +474,7 @@ async def check_awards_for_watching(backfill: bool = False):
             logger.info(
                 "award_ingestion_complete", source="tenders_sa", since=since.isoformat(), awards_checked=len(raw_awards),
                 leads_created=len(new_opportunity_ids), contacts_added=contacts_added,
-                lookup_errors=lookup_errors,
+                lookup_errors=lookup_errors, alerts_delivered=delivered,
                 contact_retry_processed=retry_processed,
             )
             return len(raw_awards)

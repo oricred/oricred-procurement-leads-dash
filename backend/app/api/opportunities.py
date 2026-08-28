@@ -2,7 +2,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -209,7 +209,10 @@ async def list_opportunities(
 
 @router.post("/{opportunity_id}/transition", response_model=OpportunityRead)
 async def transition_opportunity(
-    opportunity_id: str, body: OpportunityTransition, db: AsyncSession = Depends(get_db),
+    opportunity_id: str,
+    body: OpportunityTransition,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     opp = await db.get(Opportunity, opportunity_id)
@@ -266,10 +269,9 @@ async def transition_opportunity(
     db.add(OpportunityAudit(opportunity_id=opp.id, from_stage=old_stage, to_stage=new_stage, changed_by=current_user["name"]))
     await db.commit()
     await db.refresh(opp)
-    try:
-        await push_opportunity_to_crm(opportunity_id)
-    except Exception:
-        logger.exception("crm_push_failed", opportunity_id=opportunity_id)
+    # push_opportunity_to_crm opens its own session and logs its own failures,
+    # so it is safe to run after the response is sent.
+    background_tasks.add_task(push_opportunity_to_crm, opportunity_id)
     return await _read_opportunity_with_context(opp, db)
 
 @router.get("/{opportunity_id}", response_model=OpportunityRead)
@@ -345,6 +347,7 @@ async def find_opportunity_contact(opportunity_id: str, db: AsyncSession = Depen
 async def mark_contacted(
     opportunity_id: str,
     body: OpportunityContactedUpdate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -361,14 +364,11 @@ async def mark_contacted(
         raise HTTPException(status_code=404, detail="Opportunity not found")
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    try:
-        await push_opportunity_to_crm(opportunity_id)
-    except Exception:
-        logger.exception("crm_push_failed", opportunity_id=opportunity_id)
+    background_tasks.add_task(push_opportunity_to_crm, opportunity_id)
     return await _read_opportunity_with_context(opp, db)
 
 @router.patch("/{opportunity_id}/assign")
-async def assign_opportunity(opportunity_id: str, assignee: str, db: AsyncSession = Depends(get_db), _: dict = Depends(get_current_user)):
+async def assign_opportunity(opportunity_id: str, assignee: str, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db), _: dict = Depends(get_current_user)):
     result = await db.execute(
         select(Opportunity).where(Opportunity.id == opportunity_id)
     )
@@ -381,10 +381,7 @@ async def assign_opportunity(opportunity_id: str, assignee: str, db: AsyncSessio
     opp.assigned_to = str(target.id) if target else None
     opp.updated_at = datetime.now(timezone.utc)
     await db.commit()
-    try:
-        await push_opportunity_to_crm(opportunity_id)
-    except Exception:
-        logger.exception("crm_push_failed", opportunity_id=opportunity_id)
+    background_tasks.add_task(push_opportunity_to_crm, opportunity_id)
     return {"status": "ok", "assigned_to": assignee}
 
 
@@ -531,12 +528,16 @@ async def get_crm_activity(opportunity_id: str, db: AsyncSession = Depends(get_d
 
     from app.config import settings
     from app.services.admin_config import get_config
-    from app.services.crm.monday import MondayDotComAdapter
+    from app.services.crm.monday import CRMError, MondayDotComAdapter, validate_board_id
 
     creds = await get_config("admin_credentials", db)
     api_key = creds.get("monday_api_key", "") or settings.monday_api_key
-    board_id = creds.get("monday_board_id", "oricred_opportunities")
     if not api_key:
+        return {"activities": []}
+    try:
+        board_id = validate_board_id(creds.get("monday_board_id", ""))
+    except CRMError as exc:
+        logger.warning("crm_not_configured", error=str(exc))
         return {"activities": []}
 
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)

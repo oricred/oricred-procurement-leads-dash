@@ -56,7 +56,7 @@ DEFAULT_CREDENTIALS = {
     "tsa_api_key": "",
     "tsa_base_url": "https://api.tenders-sa.org",
     "monday_api_key": "",
-    "monday_board_id": "oricred_opportunities",
+    "monday_board_id": "",
     "monday_group_id": "main",
     "smtp_host": "",
     "smtp_port": 587,
