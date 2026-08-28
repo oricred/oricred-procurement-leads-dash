@@ -168,26 +168,13 @@ async def get_job_history(limit: int = 50, db: AsyncSession = Depends(get_db)):
 
 @router.post("/jobs/{job_name}/trigger")
 async def trigger_job(job_name: str, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db), current_user: dict = Depends(require_admin)):
-    from app.jobs.scheduler import run_job
-    handlers = {
-        "discover_tenders": "app.jobs.discovery:discover_new_tenders",
-        "check_awards": "app.jobs.award_check:backfill_recent_awards",
-        "refresh_timing_model": "app.jobs.model_refresh:refresh_timing_model",
-        "sync_crm": "app.jobs.crm_sync:sync_crm",
-        "contact_enrichment": "app.jobs.contact_enrichment:run_contact_enrichment",
-        "historical_contacts": "app.jobs.historical_contacts:sync_historical_contacts_job",
-        "backfill_tenders": "app.jobs.tender_backfill:backfill_stub_tenders",
-    }
-    import_path = handlers.get(job_name)
-    if not import_path:
+    from app.jobs.scheduler import JOBS, run_job
+
+    job = JOBS.get(job_name)
+    if not job or not job.triggerable:
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_name}")
 
-    import importlib
-    module_path, func_name = import_path.split(":")
-    module = importlib.import_module(module_path)
-    handler = getattr(module, func_name)
-
-    background_tasks.add_task(run_job, job_name, handler)
+    background_tasks.add_task(run_job, job.name, job.on_demand)
     return {"status": "accepted", "job": job_name}
 
 

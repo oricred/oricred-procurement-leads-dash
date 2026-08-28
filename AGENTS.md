@@ -2,7 +2,14 @@
 
 > **The code is the source of truth.** The `phase-*` specification documents under `docs/specifications/` are historical artifacts describing what was originally intended. The actual implementation may differ — always verify against running code.
 >
-> **Exception:** the `remediation-*` specs are *forward-looking* and describe work that has **not** been implemented yet. They document 34 defects found in the 2026-08-27 review of commit `9de20fd`, with the fix for each. Start at [`remediation-00-overview.md`](docs/specifications/remediation-00-overview.md). Several sections of this file are known to be inaccurate and are corrected there — see remediation-07 §2 before trusting the Award Date Domain Rules, admin tab count, CORS, N+1, or test-count claims below.
+> **Remediation specs:** the `remediation-*` documents record 34 defects found in the 2026-08-27 review of commit `9de20fd`, with the fix for each. **32 are implemented** (see git history on the `remediation/*` branches); the overview marks what is outstanding. Start at [`remediation-00-overview.md`](docs/specifications/remediation-00-overview.md).
+>
+> **Still open:** foreign-key constraints and the `Organization.id` column width (remediation-07 §5). Both need a check against production data before they can land — the orphan audit query and `SELECT MAX(LENGTH(id)) FROM source_organizations`. Also open: batching the two per-company aggregate queries in the award ingest loop, and per-column fetching on the pipeline board.
+
+> When you change behaviour that a section of this file describes, update that
+> section in the same commit. A stale description here costs more than a missing
+> one: it makes the next reader reason about a system that does not exist. Every
+> claim corrected in 2026-08 had been wrong for months.
 
 ## Tech Stack
 - **Backend**: Python 3.12, FastAPI, SQLAlchemy 2.0 (async), APScheduler, httpx, Pydantic v2
@@ -29,7 +36,7 @@ oricred/
 │   │   │   ├── watchlist.py     # List + toggle (POST /watchlist/toggle)
 │   │   │   ├── radar.py         # 7-day award feed + past-due count
 │   │   │   ├── dashboard.py     # Aggregate stats
-│   │   │   ├── admin.py         # 7 tabs: Credentials, Filters, Sources, Notifications, Scoring, Jobs, Users + dead-letter retry
+│   │   │   ├── admin.py         # Credentials, Jobs, Users + dead-letter retry (admin-only router)
 │   │   │   ├── contacts.py      # CRUD for company/org/opportunity contacts
 │   │   │   ├── historical_contacts.py # Historical contact list with search/filter
 │   │   │   ├── past_due.py      # Past-due queue listing
@@ -38,10 +45,11 @@ oricred/
 │   │   ├── clients/
 │   │   │   ├── base.py          # TSAClient — REST HTTP client with retry + dead-letter
 │   │   │   └── tsa_db.py        # TSADatabase — direct PostgreSQL (read-only, filter-driven)
+│   │   ├── cli.py               # create-admin, backfill-date-source
 │   │   ├── jobs/
-│   │   │   ├── scheduler.py     # APScheduler startup + dynamic reload
+│   │   │   ├── scheduler.py     # JOBS registry (single source for scheduler + Run Now)
 │   │   │   ├── discovery.py     # Tender discovery via TSADatabase SQL filters
-│   │   │   ├── award_check.py   # Batch award check (eliminated N+1)
+│   │   │   ├── award_check.py   # Award ingest — batched preload, one remote org fetch per run
 │   │   │   ├── model_refresh.py # Weekly timing model recompute
 │   │   │   ├── tender_backfill.py # Backfill stub tenders from TSA DB
 │   │   │   ├── crm_sync.py      # Push opportunities to Monday.com
@@ -63,7 +71,7 @@ oricred/
 │   │   │   └── __init__.py      # Re-exports all
 │   │   └── services/            # Business logic
 │   │       ├── auth.py, qualification.py, award_timing.py
-│   │       ├── contact_sufficiency.py, competitor_intel.py
+│   │       ├── contact_sufficiency.py, text_utils.py
 │   │       ├── email_alert.py, funding_suitability.py
 │   │       ├── buyer_relationship.py, buyer_preference.py
 │   │       ├── lead_scoring.py, lead_service.py, admin_config.py
@@ -84,7 +92,7 @@ oricred/
 │   │   │   ├── AwardRadar.tsx   # Side panel: past-due count + recent awards
 │   │   │   ├── KanbanColumn.tsx # Droppable kanban column
 │   │   │   ├── OpportunityCard.tsx # Draggable card with badges
-│   │   │   ├── OpportunityModal.tsx # Full detail modal (644 lines)
+│   │   │   ├── OpportunityModal.tsx # Full detail modal
 │   │   │   ├── WorkflowActions.tsx # Transition buttons
 │   │   │   ├── FilterBar.tsx    # Reusable filter controls
 │   │   │   ├── DataTable.tsx    # Reusable paginated table
@@ -94,7 +102,7 @@ oricred/
 │   │       ├── DiscoverPage.tsx # Tabs: Watching, Awards, Tenders, History, Past-Due
 │   │       ├── LeadsPage.tsx    # Filtered lead inbox
 │   │       ├── PipelinePage.tsx # Kanban board with DnD + modal
-│   │       ├── AdminPage.tsx    # Admin dashboard (7 tabs)
+│   │       ├── AdminPage.tsx    # Admin dashboard (Credentials, Jobs, Users)
 │   │       └── HelpPage.tsx     # Help documentation
 │   └── package.json
 ├── docs/
@@ -111,7 +119,7 @@ oricred/
 │       ├── phase-3-predictive-intelligence.md
 │       ├── award-data-enrichment.md
 │       ├── contact-editing.md
-│       └── remediation-00-overview.md   # ── Remediation phase (2026-08, NOT YET IMPLEMENTED)
+│       └── remediation-00-overview.md   # ── Remediation phase (2026-08)
 │           ├── remediation-01-contact-enrichment-restoration.md
 │           ├── remediation-02-security-hardening.md
 │           ├── remediation-03-ingestion-correctness.md
@@ -136,7 +144,7 @@ oricred/
 - **Schemas**: Pydantic v2 with `from_attributes = True` for ORM mapping
 - **Scheduler**: APScheduler AsyncIOScheduler, jobs logged to `job_runs` table
 - **Frontend API**: Axios client with Bearer token interceptor, TanStack Query for data fetching
-- **CORS**: Wildcard in dev, locked down in prod
+- **CORS**: `ORICRED_CORS_ORIGINS`, comma-separated. Empty = same-origin only (the standard deployment, since FastAPI serves the SPA); localhost:5173 is added in debug
 - **Stage transition**: Use `POST /opportunities/{id}/transition` (not direct stage PATCH)
 
 ## Workflow Stages
@@ -154,7 +162,7 @@ new_lead → client_contacted → qualified_lead → won_opportunity → credit_
 - Tender discovery, award check, timing model jobs
 - Qualification filter engine (config-driven)
 - Contact-sufficiency classifier
-- Competitor intel (speculative + confirmed bidders)
+- Confirmed bidders on a lead (`related_bidders`, populated during award ingest)
 - Kanban pipeline with drag-and-drop
 - AwardRadar sidebar (7-day feed + past-due counter)
 - Watching/Matching board with award-timing windows
@@ -169,7 +177,7 @@ new_lead → client_contacted → qualified_lead → won_opportunity → credit_
 - Municipal filter config update (includes "municipal" entity type)
 - Municipal scraper adapter foundation (abstract + stubs)
 - Frontend: funding suitability badge, buyer relationship panel
-- Admin UI (7 tabs): Credentials, Filter Config, Sources, Notifications, Scoring, Jobs, Users
+- Admin UI: Credentials, Jobs, Users (Filters/Sources/Notifications/Scoring tabs removed in a515055; endpoints remain)
 - CRM item ID persistence + deduplication
 - CRM push on opportunity assign
 - Monday.com activity display in opportunity modal
@@ -216,35 +224,44 @@ tender.published_at ≤ tender.closing_date ≤ award.award_date ≤ award.publi
 ```
 
 **Resolution logic** (`_resolve_award_date` in `award_check.py`):
-1. **Direct use** — if raw date parses to a sane date (≤ discovered_at, ≥ tender
-   earliest, ≤ pub_date), use as-is.
-2. **Year correction** — if the raw date has a bad year (future or parse_datetime
-   rejects it via MAX_VALID_YEAR), reconstruct the year using reference dates in
-   priority order: award `publication_date.year` → `tender.published_at.year` →
-   `tender.closing_date.year` → `discovered_at.year` → `discovered_at.year - 1`.
-   Month/day from the raw date is preserved. The corrected date must be ≤
-   discovered_at (the award can't be in the future from when we discovered it).
-3. **Pub-date validation** — if corrected award_date > publication_date, the
-   month/day is also wrong; award_publication_date is used as the award date
-   instead.
-4. **Fallback** — best available proxy: `award.publication_date` →
-   `tender.published_at` → `tender.closing_date` → `discovered_at`.
-5. **Absolute last resort** — `now` (should never be reached since discovered_at ≤ now).
+1. **Source date** — if the raw date parses and is not after `discovered_at`,
+   use it. `from_source = True`.
+2. **Source created_at** — the TSA DB row's creation timestamp, if it is not in
+   the future. `from_source = True`.
+3. **Discovery date** — when we first saw the record. `from_source = False`.
+
+The resolver returns `ResolvedAwardDate(value, from_source)`. `from_source` is
+what keeps two different consumers honest about the same number: the award date
+is a business value that must never be NULL, so branch 3 synthesises one — but
+the ingestion cursor must never move past a date we have actually confirmed.
+Only source-backed dates advance it. Feeding a synthesised date to the cursor
+pushed it to today and silently skipped every award published afterwards with an
+older date.
+
+`awards.date_source` records which branch produced the stored value, so the
+nightly repair job scans only rows that are still unresolved and a repaired row
+drops out permanently.
+
+**Removed 2026-08:** year correction from reference dates, pub-date validation,
+and `_parse_lenient()`. AGENTS.md described all three long after they were
+deleted. Corrupt years now fall through to branch 2 or 3 and are marked
+`date_source != "source"`.
 
 **Key functions:**
-- `_resolve_award_date()` — never returns None, always produces a usable date
-- `_parse_lenient()` — parses without MAX_VALID_YEAR guard for year-correction recovery
+- `_resolve_award_date()` — never returns None; reports whether the date is source-backed
 - `parse_datetime()` — strict parse with `MAX_VALID_YEAR = 2027` guard
-- `fix_corrupted_award_dates()` — daily recovery job (4AM default)
+- `fix_corrupted_award_dates()` — daily recovery job (4AM default), batch-capped
+- `python -m app.cli backfill-date-source` — one-off, marks pre-existing rows
 
 **Key files:**
 - `app/jobs/award_check.py` — `_resolve_award_date()`, `fix_corrupted_award_dates()`
 - `app/utils.py` — `parse_datetime()` with `MAX_VALID_YEAR = 2027`
-- `app/database.py` — `_ensure_award_columns()` adds `publication_date` column
+- `app/database.py` — `_ensure_award_columns()` adds `publication_date`, `date_source`
 
 ## Tests
 - Located in `backend/tests/`
-- Run with: `cd backend && .venv/bin/pytest` (53 tests for contacts, TSADatabase, competitor intel)
+- Run with: `cd backend && .venv/bin/pytest`
+- `ruff check app tests`, `mypy app` and `pytest` all run in CI (`.github/workflows/ci.yml`)
 - `asyncio_mode = auto` configured in pyproject.toml
 
 ## Deployment

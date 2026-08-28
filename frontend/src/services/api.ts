@@ -141,19 +141,17 @@ export const dashboard = {
  */
 export const SECRET_SENTINEL = '•'.repeat(12);
 
+/**
+ * Only what the Admin page actually calls.
+ *
+ * Client functions for the Filters, Sources, Notifications and Scoring tabs
+ * were removed here when those tabs were dropped in a515055 — the endpoints
+ * still exist, so add them back alongside a UI that uses them rather than
+ * keeping callers-of-nothing around.
+ */
 export const admin = {
-  getFilterConfig: () => api.get('/admin/filter-config'),
-  updateFilterConfig: (config: Record<string, unknown>) =>
-    api.put('/admin/filter-config', config),
-  getSettings: () => api.get('/admin/settings'),
   getCredentials: () => api.get('/admin/credentials'),
   updateCredentials: (body: Record<string, string>) => api.put('/admin/credentials', body),
-  getSources: () => api.get('/admin/sources'),
-  updateSources: (body: Record<string, unknown>) => api.put('/admin/sources', body),
-  getNotifications: () => api.get('/admin/notifications'),
-  updateNotifications: (body: Record<string, unknown>) => api.put('/admin/notifications', body),
-  getScoring: () => api.get('/admin/scoring'),
-  updateScoring: (body: Record<string, unknown>) => api.put('/admin/scoring', body),
   getJobs: () => api.get('/admin/jobs'),
   updateJobs: (body: Record<string, unknown>) => api.put('/admin/jobs', body),
   getJobHistory: (limit = 50) => api.get('/admin/jobs/history', { params: { limit } }),
@@ -164,13 +162,6 @@ export const admin = {
   updateUser: (userId: string, body: Record<string, string>) =>
     api.put<User>(`/admin/users/${userId}`, body),
   deleteUser: (userId: string) => api.delete(`/admin/users/${userId}`),
-  getFailedApiCalls: (resolved?: boolean) =>
-    api.get<{ items: Array<{ id: string; endpoint: string; method?: string; error: string; attempts: number; failed_at: string; resolved: boolean }> }>(
-      '/admin/failed-api-calls',
-      { params: resolved !== undefined ? { resolved } : {} },
-    ),
-  retryFailedApiCall: (callId: string) =>
-    api.post<{ status: string; message: string }>(`/admin/failed-api-calls/${callId}/retry`),
 };
 
 export const buyerRelationships = {

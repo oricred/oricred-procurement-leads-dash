@@ -117,22 +117,23 @@ DEFAULT_SCORING = {
     },
 }
 
-DEFAULT_JOBS = {
-    "discover_tenders": {"enabled": True, "cron": "*/15 * * * *", "description": "Poll Tenders-SA for new tenders"},
-    "check_awards": {"enabled": True, "cron": "*/30 * * * *", "description": "Ingest Tenders-SA awards incrementally"},
-    "refresh_timing_model": {"enabled": True, "cron": "0 2 * * 0", "description": "Recompute award-timing model"},
-    "sync_crm": {"enabled": True, "cron": "30 * * * *", "description": "Sync CRM activity from Monday.com"},
-    "contact_enrichment": {"enabled": True, "cron": "0 3 * * 1,4", "description": "Enrich contacts from Tenders-SA"},
-    "historical_contacts": {"enabled": True, "cron": "30 2 * * *", "description": "Import historical awarded companies and contacts"},
-    "fix_corrupted_award_dates": {"enabled": True, "cron": "0 4 * * *", "description": "Repair awards with NULL or future dates"},
-}
+def _default_jobs() -> dict:
+    """Derived from the job registry rather than duplicated.
+
+    Imported lazily: app.jobs.scheduler imports this module for get_config, so a
+    module-level import would be circular.
+    """
+    from app.jobs.scheduler import DEFAULT_JOBS as REGISTRY_DEFAULTS
+
+    return dict(REGISTRY_DEFAULTS)
 
 CONFIG_DEFAULTS: dict[str, tuple[dict, str]] = {
     "admin_credentials": (DEFAULT_CREDENTIALS, "API credentials and SMTP settings"),
     "admin_sources": (DEFAULT_SOURCES, "Data source configuration (municipal portals + API sources)"),
     "admin_notifications": (DEFAULT_NOTIFICATIONS, "Email notification settings"),
     "admin_scoring": (DEFAULT_SCORING, "Scoring weights and parameters"),
-    "admin_jobs": (DEFAULT_JOBS, "Scheduled job configuration"),
+    # Populated from the registry on first use; see _default_jobs above.
+    "admin_jobs": ({}, "Scheduled job configuration"),
 }
 
 CONFIG_KEYS = list(CONFIG_DEFAULTS.keys())
@@ -143,6 +144,8 @@ async def get_config(key: str, db: AsyncSession) -> dict:
     row = result.scalar_one_or_none()
     if row:
         return row.value
+    if key == "admin_jobs":
+        return _default_jobs()
     defaults, _ = CONFIG_DEFAULTS.get(key, ({}, ""))
     return dict(defaults)
 
@@ -177,6 +180,9 @@ async def get_all_configs(db: AsyncSession) -> dict:
     configs = {row.key: row.value for row in rows}
     for key in CONFIG_KEYS:
         if key not in configs:
-            defaults, _ = CONFIG_DEFAULTS.get(key, ({}, ""))
-            configs[key] = dict(defaults)
+            if key == "admin_jobs":
+                configs[key] = _default_jobs()
+            else:
+                defaults, _ = CONFIG_DEFAULTS.get(key, ({}, ""))
+                configs[key] = dict(defaults)
     return configs

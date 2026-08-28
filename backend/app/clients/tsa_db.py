@@ -452,64 +452,6 @@ class TSADatabase:
             rows = result.mappings().all()
             return [dict(row) for row in rows]
 
-    async def query_tenders_from_config(
-        self,
-        config: dict[str, Any],
-        since: str | None = None,
-        fields: list[str] | None = None,
-        limit: int = 500,
-    ) -> list[dict[str, Any]]:
-        """Build filters from qualification config and query tenders."""
-        filters: dict[str, Any] = {}
-
-        if since:
-            filters["since"] = since
-
-        value_rules = config.get("value_range", {}).get("rules", [])
-        for rule in value_rules:
-            if rule.get("min") is not None:
-                filters["value_min"] = rule["min"]
-            if rule.get("max") is not None:
-                filters["value_max"] = rule["max"]
-
-        sector_rules = config.get("sector", {}).get("rules", [])
-        for rule in sector_rules:
-            if rule.get("type") == "include" and rule.get("values"):
-                filters["category"] = rule["values"]
-            elif rule.get("type") == "exclude" and rule.get("values"):
-                filters["_exclude_categories"] = rule["values"]
-
-        province_rules = config.get("province", {}).get("rules", [])
-        for rule in province_rules:
-            if rule.get("type") == "include" and rule.get("values"):
-                filters["province"] = rule["values"]
-
-        entity_rules = config.get("entity_type", {}).get("rules", [])
-        for rule in entity_rules:
-            if rule.get("type") == "include" and rule.get("values"):
-                filters["entity_type"] = rule["values"]
-
-        default_fields = fields or [
-            "tender_id", "title", "description", "estimated_value",
-            "province", "closing_date", "status", "type",
-            "source_organization_id", "source_organization",
-            "publication_date", "category_id",
-        ]
-
-        return await self.query_tenders(filters, default_fields, limit)
-
-    async def count_tenders(self, filters: dict[str, Any] | None = None) -> int:
-        where, params = _build_tender_where(filters)
-        sql = f"""
-            SELECT COUNT(*)
-            FROM tenders t
-            LEFT JOIN source_organizations o ON o.id = t.source_organization_id
-            {where}
-        """
-        async with self._session_factory() as session:
-            result = await session.execute(text(sql), params)
-            return result.scalar() or 0
-
     # ── Awards ──
 
     async def query_awards(

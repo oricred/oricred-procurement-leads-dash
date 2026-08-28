@@ -97,14 +97,16 @@ class EntityTypeFilter(FilterHandler):
         return FilterResult(passed=True)
 
 
-class BEEFilter(FilterHandler):
-    async def evaluate(self, tender: Tender, rules: list[dict], db: AsyncSession | None = None) -> FilterResult:
-        return FilterResult(passed=True)
-
-
-class RiskExclusionFilter(FilterHandler):
-    async def evaluate(self, tender: Tender, rules: list[dict], db: AsyncSession | None = None) -> FilterResult:
-        return FilterResult(passed=True)
+# BEEFilter and RiskExclusionFilter used to sit here, both returning passed=True
+# unconditionally while default_config shipped rules for them — so the Admin
+# filter page presented settings that had no effect, which is worse than
+# offering none.
+#
+# Neither can be implemented at this point: qualification runs against a tender
+# at discovery time, before any supplier exists, and both B-BBEE level and
+# restricted-supplier status are attributes of the awarded company. Supplier
+# risk is already applied where the data exists — compute_lead_priority scores a
+# restricted supplier at zero.
 
 
 class PreferenceFilter(FilterHandler):
@@ -152,8 +154,6 @@ class QualificationService:
             "sector": SectorFilter(),
             "province": ProvinceFilter(),
             "entity_type": EntityTypeFilter(),
-            "bee_level": BEEFilter(),
-            "risk_exclusion": RiskExclusionFilter(),
             "preference": PreferenceFilter(),
         }
 
@@ -191,14 +191,6 @@ class QualificationService:
             "entity_type": {
                 "enabled": True,
                 "rules": [{"type": "include", "values": ["national", "provincial", "soe", "municipal"]}],
-            },
-            "bee_level": {
-                "enabled": True,
-                "rules": [{"min_level": 1, "max_level": 4, "min_points": 75}],
-            },
-            "risk_exclusion": {
-                "enabled": True,
-                "rules": [{"exclude_if_restricted": True, "max_forensic_score": 70.0}],
             },
             "preference": {
                 "enabled": True,
