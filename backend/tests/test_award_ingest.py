@@ -319,3 +319,117 @@ class TestCorruptedDateScan:
         async with ingest_env() as db:
             award = (await db.execute(_select(Award))).scalars().one()
         assert award.date_source == "source"
+
+
+class TestBatching:
+    """Regression guard for the M2 defect.
+
+    The loop issued a company lookup, an award lookup, a watchlist lookup, an
+    opportunity lookup and up to two tender lookups per award, plus one query to
+    the external Tenders-SA database per award for the buyer organisation —
+    roughly 30,000 local queries and 5,000 remote ones for a 5,000-award page.
+    """
+
+    @staticmethod
+    def _awards(count: int) -> list[dict]:
+        return [
+            _award(f"award-{i}", f"Supplier {i}", "2026-06-01")
+            for i in range(count)
+        ]
+
+    async def test_query_count_barely_grows_with_batch_size(
+        self, ingest_env, tsa_stub, monkeypatch
+    ):
+        import app.jobs.award_check as award_check
+
+        counts = {}
+        for size in (2, 40):
+            # A fresh database per size, so the second run is not a no-op.
+            from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+            from sqlalchemy.pool import StaticPool
+
+            import app.database as database
+
+            engine = create_async_engine(
+                "sqlite+aiosqlite://",
+                poolclass=StaticPool,
+                connect_args={"check_same_thread": False},
+            )
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with engine.begin() as conn:
+                await conn.run_sync(database.Base.metadata.create_all)
+
+            issued = 0
+            original = factory
+
+            def counting_factory(*, _f=original):
+                session = _f()
+                inner = session.execute
+
+                async def counting(statement, *args, **kwargs):
+                    nonlocal issued
+                    issued += 1
+                    return await inner(statement, *args, **kwargs)
+
+                session.execute = counting
+                return session
+
+            monkeypatch.setattr(award_check, "async_session", counting_factory)
+            stub = _stub(tsa_stub, awards=self._awards(size))
+            monkeypatch.setattr(award_check, "TSADatabase", lambda: stub)
+
+            await award_check.check_awards_for_watching()
+            counts[size] = issued
+            await engine.dispose()
+
+        # Every upsert and context lookup is now batched, so the only queries
+        # that still scale with the batch are two per-company aggregates: the
+        # 12-month award total for funding suitability, and the prior-award
+        # count for lead priority. Both are genuine per-company reads over the
+        # awards table; batching them needs a GROUP BY and is tracked as
+        # follow-up work in remediation-04.
+        #
+        # Was roughly 7 local queries per award plus one remote call each.
+        marginal = (counts[40] - counts[2]) / (40 - 2)
+        assert marginal <= 3, (
+            f"{marginal:.1f} queries per additional award (expected <= 3): {counts}"
+        )
+
+    async def test_the_buyer_organisation_is_fetched_once_per_run(
+        self, ingest_env, tsa_stub, monkeypatch
+    ):
+        import app.jobs.award_check as award_check
+
+        stub = _stub(tsa_stub, awards=self._awards(10))
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: stub)
+        await award_check.check_awards_for_watching()
+
+        org_queries = [sql for sql, _ in stub.calls if "FROM source_organizations" in sql]
+        assert len(org_queries) == 1, (
+            f"queried the external database {len(org_queries)} times for organisations"
+        )
+
+    async def test_two_awards_for_one_new_tender_create_one_tender(
+        self, ingest_env, tsa_stub, monkeypatch
+    ):
+        """The cache must write new rows back, or a preload would let a second
+        award in the same batch insert a duplicate."""
+        from sqlalchemy import select as _select
+
+        import app.jobs.award_check as award_check
+        from app.models.company import Company
+
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub, awards=[
+            _award("a1", "Sizwe Construction", "2026-06-01"),
+            _award("a2", "Sizwe Construction", "2026-06-02"),
+        ]))
+        await award_check.check_awards_for_watching()
+
+        async with ingest_env() as db:
+            tenders = (await db.execute(_select(Tender))).scalars().all()
+            companies = (await db.execute(_select(Company))).scalars().all()
+            opps = (await db.execute(_select(Opportunity))).scalars().all()
+
+        assert len(tenders) == 1, "the same tender was inserted twice"
+        assert len(companies) == 1, "the same supplier was inserted twice"
+        assert len(opps) == 2, "each award should still produce its own lead"

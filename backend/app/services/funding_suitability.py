@@ -46,11 +46,18 @@ def compute_score(
 async def compute_funding_suitability(
     company_id: str,
     db: AsyncSession,
+    company: Company | None = None,
 ) -> float:
-    result = await db.execute(
-        select(Company).where(Company.id == company_id)
-    )
-    company = result.scalar_one_or_none()
+    """Score a supplier's suitability for funding.
+
+    `company` may be supplied by a caller that already holds it; the award
+    ingest loop does, and passing it removes one query per new lead.
+    """
+    if company is None:
+        result = await db.execute(
+            select(Company).where(Company.id == company_id)
+        )
+        company = result.scalar_one_or_none()
     if not company:
         return 0.0
 
