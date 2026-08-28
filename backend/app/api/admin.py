@@ -9,6 +9,7 @@ from app.clients.base import TSAClient
 from app.database import get_db
 from app.models.failed_api_call import FailedApiCall
 from app.models.filter_config import FilterConfig
+from app.models.historical_ingestion_state import HistoricalIngestionState
 from app.models.job_run import JobRun
 from app.models.user import User
 from app.schemas.auth import UserRead
@@ -176,6 +177,24 @@ async def trigger_job(job_name: str, background_tasks: BackgroundTasks, db: Asyn
 
     background_tasks.add_task(run_job, job.name, job.on_demand)
     return {"status": "accepted", "job": job_name}
+
+
+@router.get("/jobs/backfill-status")
+async def get_backfill_status(db: AsyncSession = Depends(get_db)):
+    state = await db.get(HistoricalIngestionState, "historical_awards")
+    if not state:
+        return {"job_name": "historical_awards", "status": "not_started"}
+    return {
+        "job_name": state.job_name,
+        "status": state.status,
+        "current_lower_bound": state.current_lower_bound.isoformat() if state.current_lower_bound else None,
+        "current_upper_bound": state.current_upper_bound.isoformat() if state.current_upper_bound else None,
+        "target_lower_bound": state.target_lower_bound.isoformat() if state.target_lower_bound else None,
+        "total_processed": state.total_processed,
+        "errors": state.errors,
+        "started_at": state.started_at.isoformat() if state.started_at else None,
+        "updated_at": state.updated_at.isoformat() if state.updated_at else None,
+    }
 
 
 # ── Users ──

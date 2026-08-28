@@ -148,7 +148,15 @@ async def _upsert_contact(
                     await db.commit()
                 return False
 
+            # Deliberately no "any contact with no email" lookup here. That
+            # matches the first email-less contact for the entity regardless of
+            # who it is, so a company could still only ever hold one phone-only
+            # person — the H3 defect. The name match below is the precise
+            # version of the same dedup.
+
         # Match by name for contacts already imported without a stable email.
+        # .first() rather than scalar_one_or_none(): duplicates exist in practice
+        # and raising MultipleResultsFound here just loses the contact.
         result = await db.execute(
             select(Contact)
             .where(

@@ -162,7 +162,7 @@ Tracked tenders between publication and award, with expected-award countdown fro
 
 ### Phase 2b — UI Navigation, Awards & Tenders Browsers (Completed)
 - Navigation restructure: single-page Discover with tabs
-- Awards browser: filterable/paginated + CSV export + create-lead
+- Awards browser: filterable/paginated + CSV export + convert-to-lead (`POST /awards/{id}/lead`)
 - Tenders browser: filterable/paginated + watch toggle + status badges
 - Historical contacts browser
 - Watchlist toggle endpoint

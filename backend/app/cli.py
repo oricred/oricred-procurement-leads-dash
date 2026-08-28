@@ -59,11 +59,7 @@ async def backfill_date_source(batch_size: int = 5_000) -> None:
     """
     from sqlalchemy import select
 
-    from app.jobs.award_check import (
-        DATE_SOURCE_SOURCE,
-        DATE_SOURCE_SYNTHESISED,
-        _resolve_award_date,
-    )
+    from app.jobs.award_check import _date_provenance, _resolve_award_date
     from app.models.award import Award
 
     total = 0
@@ -86,10 +82,9 @@ async def backfill_date_source(batch_size: int = 5_000) -> None:
                     award.source_created_at,
                     award.discovered_at,
                     now,
+                    publication_date=award.publication_date,
                 )
-                award.date_source = (
-                    DATE_SOURCE_SOURCE if resolved.from_source else DATE_SOURCE_SYNTHESISED
-                )
+                award.date_source = _date_provenance(payload.get("award_date"), resolved)
             await db.commit()
             total += len(rows)
             print(f"  {total} awards marked")

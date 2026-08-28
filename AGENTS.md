@@ -31,7 +31,7 @@ oricred/
 │   │   │   ├── auth.py          # Login, /me, /assignees, JWT validation
 │   │   │   ├── opportunities.py # CRUD, transition, mark-contacted, find-contact, audit, relationship, funding, preference, crm-activity
 │   │   │   ├── leads.py         # Filtered lead inbox
-│   │   │   ├── awards.py        # Filterable/paginated awards browser + export + create-lead
+│   │   │   ├── awards.py        # Filterable/paginated awards browser + export + POST /awards/{id}/lead
 │   │   │   ├── tenders.py       # Filterable/paginated tenders browser + provinces
 │   │   │   ├── watchlist.py     # List + toggle (POST /watchlist/toggle)
 │   │   │   ├── radar.py         # 7-day award feed + past-due count
@@ -194,7 +194,7 @@ new_lead → client_contacted → qualified_lead → won_opportunity → credit_
 ### Phase 2b — UI Navigation & Data Browsers (Completed)
 - Navigation restructure: single-page Discover with tabs (Watching, Awards, Tenders, History, Past-Due)
 - Legacy routes (/awards, /tenders, /matching, /past-due, /historical-contacts) redirect to Discover
-- Awards browser: filterable/paginated table + CSV export + create-lead
+- Awards browser: filterable/paginated table + CSV export + convert-to-lead (`POST /awards/{id}/lead`)
 - Tenders browser: filterable/paginated table + watch toggle + status badges
 - Historical contacts list with search/contactability filter
 - GET /api/awards, GET /api/tenders, GET /api/organizations, GET /api/categories

@@ -10,6 +10,18 @@ logger = logging.getLogger(__name__)
 MAX_VALID_YEAR = 2027
 
 
+def as_utc(value: datetime | None) -> datetime | None:
+    """Treat a stored timestamp as UTC so it can be compared with ``now()``.
+
+    SQLite discards the offset of a ``DateTime(timezone=True)`` column, so a
+    value round-tripped through the dev database reads back naive and cannot be
+    subtracted from an aware datetime. Postgres is unaffected and passes through.
+    """
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
 def parse_datetime(value: Any, context: str = "") -> datetime | None:
     if value is None:
         return None

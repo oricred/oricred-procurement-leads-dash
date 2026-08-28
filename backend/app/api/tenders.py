@@ -46,7 +46,11 @@ def _status_columns() -> tuple:
     )
     past_due_id = (
         select(PastDueQueue.id)
-        .where(PastDueQueue.tender_id == Tender.id)
+        .where(
+            PastDueQueue.tender_id == Tender.id,
+            # A resolved entry is history; only a pending one is a live state.
+            PastDueQueue.resolution == "pending",
+        )
         .limit(1)
         .correlate(Tender)
         .scalar_subquery()
@@ -102,7 +106,8 @@ def _apply_status_filter(query, status: str):
         return query.where(
             exists(
                 select(PastDueQueue.id).where(
-                    PastDueQueue.tender_id == Tender.id
+                    PastDueQueue.tender_id == Tender.id,
+                    PastDueQueue.resolution == "pending",
                 )
             )
         )
@@ -110,12 +115,14 @@ def _apply_status_filter(query, status: str):
         return query.where(
             ~exists(
                 select(WatchlistItem.id).where(
-                    WatchlistItem.tender_id == Tender.id
+                    WatchlistItem.tender_id == Tender.id,
+                    WatchlistItem.status.in_(("watching", "awarded", "past_due")),
                 )
             )
             & ~exists(
                 select(PastDueQueue.id).where(
-                    PastDueQueue.tender_id == Tender.id
+                    PastDueQueue.tender_id == Tender.id,
+                    PastDueQueue.resolution == "pending",
                 )
             )
             & ~exists(

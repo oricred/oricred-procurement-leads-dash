@@ -9,6 +9,16 @@ from app.schemas.opportunity import (
     OpportunityUpdate,
 )
 from app.schemas.radar import RadarAward, RadarData
+from app.schemas.stats import (
+    BuyerCount,
+    CategoryCount,
+    ProvinceCount,
+    SourceCount,
+    StatsResponse,
+    StatusCount,
+    YearlyCount,
+    YearlyValue,
+)
 from app.schemas.watchlist import WatchlistItemRead, WatchlistList
 
 __all__ = [
@@ -22,6 +32,14 @@ __all__ = [
     "WatchlistList",
     "DashboardStats",
     "StageCount",
+    "StatsResponse",
+    "YearlyCount",
+    "YearlyValue",
+    "ProvinceCount",
+    "SourceCount",
+    "StatusCount",
+    "BuyerCount",
+    "CategoryCount",
     "LoginRequest",
     "TokenResponse",
     "UserRead",

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.company import Company
 from app.services.award_history import AwardHistory, load_one
+from app.utils import as_utc
 
 
 def compute_score(
@@ -68,8 +69,9 @@ async def compute_funding_suitability(
     total_value = history.value_last_12m
 
     age_days = None
-    if company.created_at:
-        age_days = (datetime.now(timezone.utc) - company.created_at).days
+    created_at = as_utc(company.created_at)
+    if created_at:
+        age_days = (datetime.now(timezone.utc) - created_at).days
 
     return compute_score(
         bee_level=company.bee_level,

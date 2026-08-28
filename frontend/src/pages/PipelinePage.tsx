@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
 import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDroppable, pointerWithin, closestCorners, type DragStartEvent, type DragEndEvent, type CollisionDetection } from '@dnd-kit/core';
 import { opportunities } from '../services/api';
@@ -22,8 +22,8 @@ const terminalPhases: Record<string, Stage[]> = {
   Lost: ['lost_lead'],
 };
 
-function PhaseDroppable({ phase, stages, items, onCardClick, onDecline }: {
-  phase: string; stages: readonly Stage[]; items: Opportunity[]; onCardClick: (opp: Opportunity) => void; onDecline: (opp: Opportunity) => void;
+function PhaseDroppable({ phase, items, total, onCardClick, onDecline }: {
+  phase: string; stages: readonly Stage[]; items: Opportunity[]; total: number; onCardClick: (opp: Opportunity) => void; onDecline: (opp: Opportunity) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: phase });
   return (
@@ -36,7 +36,7 @@ function PhaseDroppable({ phase, stages, items, onCardClick, onDecline }: {
     >
       <header className="flex items-center justify-between border-b border-surface-300 px-4 py-3">
         <h3 className="text-sm font-semibold text-gray-200">{phase}</h3>
-        <span className="text-xs text-gray-500">{items.length}</span>
+        <span className="text-xs text-gray-500">{total}</span>
       </header>
       <div className="flex-1 space-y-3 p-3">
         {items.map((opp) => (
@@ -109,28 +109,48 @@ export default function PipelinePage() {
   const [declining, setDeclining] = useState<Opportunity | null>(null);
   const [dndError, setDndError] = useState<string | null>(null);
 
-  // The endpoint is now paginated, so the board asks for one large page and
-  // says so when there are more. Fetching per column would be better still, but
-  // it means moving cards between two caches in the optimistic drag update —
-  // see remediation-04 section 4.3.
-  const BOARD_PAGE_SIZE = 500;
+  const PHASE_LIMIT = 200;
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['opportunities'],
-    queryFn: async () => (await opportunities.list({ page_size: BOARD_PAGE_SIZE })).data,
-    // 15s was never a product requirement — award ingest runs every 30 minutes.
-    // Pausing while the tab is hidden, plus refetch on focus, is strictly more
-    // responsive to where the operator actually is.
-    refetchInterval: () => (document.visibilityState === 'visible' ? 60_000 : false),
-    refetchOnWindowFocus: true,
+  // One query per column. A single global page ordered by priority score pushed
+  // late-stage deals (which often have no score) off the board entirely.
+  const allPhases = Object.entries({ ...phases, ...terminalPhases });
+  const phaseQueries = useQueries({
+    queries: allPhases.map(([phase, stages]) => ({
+      queryKey: ['opportunities', phase],
+      queryFn: async () => (await opportunities.list({ stage: stages, limit: PHASE_LIMIT, offset: 0 })).data,
+      // Seven columns polling at once, so pause while the tab is hidden and
+      // refetch on focus instead. Award ingest runs every 30 minutes; 15s was
+      // never a product requirement.
+      refetchInterval: () => (document.visibilityState === 'visible' ? 60_000 : false),
+      refetchOnWindowFocus: true,
+    })),
+  });
+  const itemsByPhase = Object.fromEntries(
+    allPhases.map(([phase], index) => [phase, phaseQueries[index]?.data?.items ?? []]),
+  ) as Record<string, Opportunity[]>;
+  const totalsByPhase = Object.fromEntries(
+    allPhases.map(([phase], index) => [phase, phaseQueries[index]?.data?.total ?? 0]),
+  ) as Record<string, number>;
+  const isLoading = phaseQueries.some((q) => q.isLoading);
+
+  // A deep-linked card may not be in any loaded page, so fetch it directly
+  // rather than silently opening nothing.
+  const openId = searchParams.get('open');
+  const loadedOpen = openId
+    ? Object.values(itemsByPhase).flat().find((x) => x.id === openId)
+    : undefined;
+  const { data: deepLinked } = useQuery({
+    queryKey: ['opportunity', openId],
+    queryFn: async () => (await opportunities.get(openId as string)).data,
+    enabled: Boolean(openId) && !loadedOpen,
   });
 
-  const truncated = data ? data.total > data.items.length : false;
 
   useEffect(() => {
-    const id = searchParams.get('open');
-    if (id && data) setSelected(data.items.find((x) => x.id === id) ?? null);
-  }, [searchParams, data]);
+    if (!openId) return;
+    const found = loadedOpen ?? deepLinked;
+    if (found) setSelected(found);
+  }, [openId, loadedOpen, deepLinked]);
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['opportunities'] });
@@ -149,33 +169,41 @@ export default function PipelinePage() {
     },
     onMutate: async ({ id, action }) => {
       await queryClient.cancelQueries({ queryKey: ['opportunities'] });
-      const previous = queryClient.getQueryData(['opportunities']);
+      // Each column is its own cache, so an optimistic move has to lift the card
+      // out of one and drop it into another.
+      const previous = allPhases.map(([phase]) => [phase, queryClient.getQueryData(['opportunities', phase])] as const);
 
-      queryClient.setQueryData(['opportunities'], (old: { items: Opportunity[]; total: number } | undefined) => {
-        if (!old) return old;
-        return {
-          ...old,
-          items: old.items.map((o) => {
-            if (o.id !== id) return o;
-            let newStage: Stage | null = null;
-            if (action === 'advance' || action === 'markContacted') {
-              newStage = WORKFLOW_NEXT[o.kanban_stage] ?? null;
-            } else if (action === 'back') {
-              const prev = Object.entries(WORKFLOW_NEXT).find(([, v]) => v === o.kanban_stage);
-              if (prev) newStage = prev[0] as Stage;
-            } else if (action === 'decline') {
-              newStage = 'lost_lead';
-            }
-            return newStage ? { ...o, kanban_stage: newStage } : o;
-          }),
-        };
-      });
+      const moving = Object.values(itemsByPhase).flat().find((o) => o.id === id);
+      let newStage: Stage | null = null;
+      if (moving) {
+        if (action === 'advance' || action === 'markContacted') {
+          newStage = WORKFLOW_NEXT[moving.kanban_stage] ?? null;
+        } else if (action === 'back') {
+          const prev = Object.entries(WORKFLOW_NEXT).find(([, v]) => v === moving.kanban_stage);
+          if (prev) newStage = prev[0] as Stage;
+        } else if (action === 'decline') {
+          newStage = 'lost_lead';
+        }
+      }
+
+      if (moving && newStage) {
+        const destination = allPhases.find(([, stages]) => stages.includes(newStage as Stage))?.[0];
+        const moved = { ...moving, kanban_stage: newStage };
+        for (const [phase] of allPhases) {
+          queryClient.setQueryData(['opportunities', phase], (old: { items: Opportunity[]; total: number } | undefined) => {
+            if (!old) return old;
+            const without = old.items.filter((o) => o.id !== id);
+            const items = phase === destination ? [moved, ...without] : without;
+            return { ...old, items, total: old.total - (old.items.length - items.length) };
+          });
+        }
+      }
 
       return { previous };
     },
     onError: (err, _vars, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(['opportunities'], context.previous);
+      for (const [phase, snapshot] of context?.previous ?? []) {
+        queryClient.setQueryData(['opportunities', phase], snapshot);
       }
       const msg = (err as { response?: { data?: { detail?: string } }; message?: string }).response?.data?.detail
         ?? (err as { message?: string }).message
@@ -193,9 +221,10 @@ export default function PipelinePage() {
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
   );
 
-  const byPhase = useCallback((stages: readonly Stage[]) =>
-    (data?.items ?? []).filter((o) => stages.includes(o.kanban_stage)),
-  [data]);
+  const reportDropRefusal = (message: string) => {
+    setDndError(message);
+    setTimeout(() => setDndError(null), 5000);
+  };
 
   const handleDragStart = (event: DragStartEvent) => {
     const opp = (event.active.data.current as { opportunity?: Opportunity } | undefined)?.opportunity;
@@ -220,7 +249,9 @@ export default function PipelinePage() {
     }
 
     const targetStages = phases[targetPhase];
-    if (!targetStages) return;
+    if (!targetStages) {
+      return reportDropRefusal('Drop a card onto one of the pipeline phases.');
+    }
 
     const targetStage = targetStages[0];
     if (!targetStage || targetStage === opp.kanban_stage) return;
@@ -236,6 +267,8 @@ export default function PipelinePage() {
       }
     } else if (targetIdx === currentIdx - 1) {
       dndTransition.mutate({ id: opp.id, action: 'back', version: opp.version });
+    } else {
+      reportDropRefusal('Cards move one phase at a time — advance or backtrack step by step.');
     }
   };
 
@@ -261,12 +294,6 @@ export default function PipelinePage() {
           {dndError && (
             <div className="mb-3 rounded bg-red-500/10 px-3 py-2 text-sm text-red-300">{dndError}</div>
           )}
-          {truncated && (
-            <div className="mb-3 rounded bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
-              Showing the {data!.items.length} highest-priority of {data!.total} leads.
-              Use the Lead Inbox to filter the rest.
-            </div>
-          )}
           <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 xl:grid-cols-5">
             {Object.entries(phases).map(([phase, stages]) => (
@@ -274,7 +301,8 @@ export default function PipelinePage() {
                 key={phase}
                 phase={phase}
                 stages={stages}
-                items={byPhase(stages)}
+                items={itemsByPhase[phase] ?? []}
+                total={totalsByPhase[phase] ?? 0}
                 onCardClick={setSelected}
                 onDecline={(opp) => setDeclining(opp)}
               />
@@ -283,8 +311,8 @@ export default function PipelinePage() {
 
           {/* Terminal tray */}
           <div className="mt-5 space-y-2">
-            {Object.entries(terminalPhases).map(([name, stages]) => {
-              const items = byPhase(stages);
+            {Object.entries(terminalPhases).map(([name]) => {
+              const items = itemsByPhase[name] ?? [];
               const expanded = openTray === name;
               return (
                 <section key={name} className="rounded-lg border border-surface-300">
@@ -294,7 +322,7 @@ export default function PipelinePage() {
                   >
                     {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                     {name}
-                    <span className="text-gray-600">{items.length}</span>
+                    <span className="text-gray-600">{totalsByPhase[name] ?? 0}</span>
                   </button>
                   {expanded && (
                     <div className="grid grid-cols-1 gap-3 p-3 pt-0 md:grid-cols-3 xl:grid-cols-5">

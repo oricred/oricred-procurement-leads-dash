@@ -8,17 +8,9 @@ from app.database import get_db
 from app.models.opportunity import Opportunity
 from app.models.past_due import PastDueQueue
 from app.models.tender import Tender
+from app.utils import as_utc
 
 router = APIRouter()
-
-
-def _as_aware(value: datetime) -> datetime:
-    """Treat a naive timestamp as UTC.
-
-    PostgreSQL round-trips DateTime(timezone=True) as aware; SQLite discards the
-    offset. Subtracting one from the other raises.
-    """
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 @router.get("")
@@ -27,7 +19,7 @@ async def list_past_due(
     page_size: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
-    # Correlated subquery rather than an outer join. past_due_queue.tender_id is
+    # Correlated subquery rather than an outer join: past_due_queue.tender_id is
     # not unique against opportunities.tender_id, so a tender with two
     # opportunities produced two rows for one past-due entry.
     opportunity_id = (
@@ -42,11 +34,18 @@ async def list_past_due(
     base = (
         select(PastDueQueue, Tender, opportunity_id.label("opportunity_id"))
         .join(Tender, PastDueQueue.tender_id == Tender.id)
+        # Resolved entries stay in the table as history; the queue is what is
+        # still outstanding.
+        .where(PastDueQueue.resolution == "pending")
     )
+
     total = await db.scalar(
-        select(func.count()).select_from(select(PastDueQueue.id).join(
-            Tender, PastDueQueue.tender_id == Tender.id
-        ).subquery())
+        select(func.count()).select_from(
+            select(PastDueQueue.id)
+            .join(Tender, PastDueQueue.tender_id == Tender.id)
+            .where(PastDueQueue.resolution == "pending")
+            .subquery()
+        )
     ) or 0
 
     rows = (
@@ -70,7 +69,8 @@ async def list_past_due(
                 "entered_queue_at": pdq.entered_queue_at.isoformat(),
                 "poll_count_since_due": pdq.poll_count_since_due,
                 "resolution": pdq.resolution or "pending",
-                "days_in_queue": (now - _as_aware(pdq.entered_queue_at)).days,
+                # as_utc: PostgreSQL returns this aware, SQLite naive.
+                "days_in_queue": (now - as_utc(pdq.entered_queue_at)).days,
                 "opportunity_id": str(opp_id) if opp_id else None,
             }
             for pdq, tender, opp_id in rows

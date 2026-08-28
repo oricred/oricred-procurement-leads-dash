@@ -1,9 +1,12 @@
 import axios from 'axios';
-import type { Opportunity, Stage, RadarData, WatchlistItem, DashboardStats, User, AuditEntry, PastDueEntry, Contact, AwardItem, TenderItem, HistoricalContact } from '../types';
+import type { Opportunity, Stage, RadarData, WatchlistItem, DashboardStats, User, AuditEntry, PastDueEntry, Contact, AwardItem, TenderItem, HistoricalContact, StatsData } from '../types';
 
 const api = axios.create({
   baseURL: '/api',
   headers: { 'Content-Type': 'application/json' },
+  // FastAPI reads a repeated query param as a list; axios would otherwise emit
+  // `stage[]=…`, which it cannot parse.
+  paramsSerializer: { indexes: null },
 });
 
 api.interceptors.request.use((config) => {
@@ -72,11 +75,10 @@ export const auth = {
 };
 
 export const opportunities = {
-  list: (params?: { stage?: Stage; page?: number; page_size?: number }) =>
-    api.get<{ items: Opportunity[]; total: number; page: number; page_size: number }>(
-      '/opportunities',
-      { params: params ?? {} },
-    ),
+  list: (params?: Record<string, unknown>) =>
+    api.get<{ items: Opportunity[]; total: number }>('/opportunities', {
+      params,
+    }),
   get: (id: string) =>
     api.get<Opportunity>(`/opportunities/${id}`),
   transition: (id: string, body: { action: string; version: number; changed_by?: string; lost_reason?: string; credit_decision?: string; confirm?: boolean; conditions_checklist?: Array<Record<string, unknown>> }) =>
@@ -244,6 +246,10 @@ export const organizationsApi = {
 export const categoriesApi = {
   list: () =>
     api.get<{ id: string; name: string }[]>('/categories'),
+};
+
+export const statsApi = {
+  get: () => api.get<StatsData>('/stats'),
 };
 
 export const crmActivity = {

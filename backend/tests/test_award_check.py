@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from app.jobs.award_check import _resolve_award_date
+from app.jobs.award_check import AWARD_FIELDS, _fetch_awards_for_ingestion, _resolve_award_date
 
 
 def _dt(y, m, d, h=0, mi=0):
@@ -12,99 +12,99 @@ NOW = _dt(2026, 7, 16, 10, 0)
 
 
 class TestResolveAwardDate:
-    """The date itself. This contract is unchanged: never None."""
-
     def test_valid_raw_date_used_directly(self):
-        assert _resolve_award_date("2025-06-17", None, DISCOVERED, NOW).value == _dt(2025, 6, 17)
+        r = _resolve_award_date("2025-06-17", None, DISCOVERED, NOW)
+        assert r == _dt(2025, 6, 17)
 
-    def test_corrupt_raw_date_falls_to_source_created(self):
-        r = _resolve_award_date("2099-10-09", _dt(2025, 4, 15), DISCOVERED, NOW)
-        assert r.value == _dt(2025, 4, 15)
+    def test_corrupt_year_is_reconstructed_from_publication_year(self):
+        r = _resolve_award_date(
+            "2099-10-09", None, DISCOVERED, NOW,
+            publication_date="2025-12-01",
+            tender_closing_date="2025-03-01",
+        )
+        assert r == _dt(2025, 10, 9)
 
-    def test_corrupt_raw_no_source_created_falls_to_discovered(self):
-        assert _resolve_award_date("2099-10-09", None, DISCOVERED, NOW).value == DISCOVERED
+    def test_corrupt_raw_without_context_uses_prior_discovery_year(self):
+        r = _resolve_award_date("2099-10-09", None, DISCOVERED, NOW)
+        assert r == _dt(2025, 10, 9)
 
-    def test_null_raw_date_falls_to_source_created(self):
-        assert _resolve_award_date(None, _dt(2025, 6, 1), DISCOVERED, NOW).value == _dt(2025, 6, 1)
+    def test_null_raw_date_uses_publication_not_source_created(self):
+        r = _resolve_award_date(
+            None, _dt(2025, 6, 1), DISCOVERED, NOW,
+            publication_date="2025-06-15",
+        )
+        assert r == _dt(2025, 6, 15)
 
     def test_null_raw_no_source_falls_to_discovered(self):
-        assert _resolve_award_date(None, None, DISCOVERED, NOW).value == DISCOVERED
+        r = _resolve_award_date(None, None, DISCOVERED, NOW)
+        assert r == DISCOVERED
+
+    def test_null_raw_does_not_use_tender_publication_before_closing(self):
+        r = _resolve_award_date(
+            None, None, DISCOVERED, NOW,
+            tender_published_at="2025-01-01",
+            tender_closing_date="2025-03-01",
+        )
+        assert r == _dt(2025, 3, 1)
 
     def test_discovered_in_future_uses_now(self):
-        assert _resolve_award_date(None, None, _dt(2099, 1, 1), NOW).value == NOW
+        r = _resolve_award_date(None, None, _dt(2099, 1, 1), NOW)
+        assert r == NOW
 
-    def test_source_created_used_over_discovered(self):
-        r = _resolve_award_date("2099-10-09", _dt(2025, 6, 1), DISCOVERED, NOW)
-        assert r.value == _dt(2025, 6, 1)
+    def test_source_created_is_not_used_as_procurement_date(self):
+        r = _resolve_award_date(None, _dt(2025, 6, 1), DISCOVERED, NOW)
+        assert r == DISCOVERED
 
-    def test_never_returns_none(self):
-        """The core business rule: a missing award date makes the record useless."""
-        for raw in (None, "", "not-a-date", "2099-10-09", {"unexpected": "type"}):
-            assert _resolve_award_date(raw, None, DISCOVERED, NOW).value is not None
+    def test_award_after_publication_uses_publication_date(self):
+        r = _resolve_award_date(
+            "2025-12-09", None, DISCOVERED, NOW,
+            publication_date="2025-11-01",
+            tender_closing_date="2025-03-01",
+        )
+        assert r == _dt(2025, 11, 1)
 
-
-class TestAwardDateProvenance:
-    """Whether the date may advance the ingestion cursor.
-
-    A synthesised date equals roughly 'now'. Feeding it into the cursor moves
-    the watermark to today, and every award published afterwards with an older
-    award_date is then permanently skipped — the H1 defect.
-    """
-
-    def test_a_parsed_source_date_is_source_backed(self):
-        assert _resolve_award_date("2025-06-17", None, DISCOVERED, NOW).from_source is True
-
-    def test_source_created_at_is_source_backed(self):
-        r = _resolve_award_date("2099-10-09", _dt(2025, 4, 15), DISCOVERED, NOW)
-        assert r.from_source is True
-
-    def test_discovery_fallback_is_not_source_backed(self):
-        assert _resolve_award_date("2099-10-09", None, DISCOVERED, NOW).from_source is False
-
-    def test_null_everything_is_not_source_backed(self):
-        assert _resolve_award_date(None, None, DISCOVERED, NOW).from_source is False
-
-    def test_now_fallback_is_not_source_backed(self):
-        assert _resolve_award_date(None, None, _dt(2099, 1, 1), NOW).from_source is False
-
-    def test_a_synthesised_date_is_near_now(self):
-        """Precisely why it must not become the cursor."""
-        r = _resolve_award_date("2099-10-09", None, DISCOVERED, NOW)
-        assert r.from_source is False
-        assert r.value >= DISCOVERED
+    def test_award_before_tender_close_uses_publication_proxy(self):
+        r = _resolve_award_date(
+            "2024-01-01", None, DISCOVERED, NOW,
+            publication_date="2025-07-01",
+            tender_published_at="2025-01-01",
+            tender_closing_date="2025-03-01",
+        )
+        assert r == _dt(2025, 7, 1)
 
 
-class TestCursorAdvancement:
-    """The watermark computation, as check_awards_for_watching performs it."""
+def test_award_ingestion_requests_publication_date():
+    assert "publication_date" in AWARD_FIELDS
 
-    @staticmethod
-    def _cursor(resolved):
-        source_backed = [r.value for r in resolved if r.from_source]
-        if not source_backed:
-            return None
-        return min(max(source_backed), NOW)
 
-    def test_one_corrupt_row_does_not_drag_the_cursor_to_today(self):
-        """The H1 regression, stated directly."""
-        resolved = [
-            _resolve_award_date("2025-06-01", None, DISCOVERED, NOW),
-            _resolve_award_date("2025-06-10", None, DISCOVERED, NOW),
-            _resolve_award_date("2099-10-09", None, DISCOVERED, NOW),  # corrupt
-        ]
-        assert self._cursor(resolved) == _dt(2025, 6, 10)
+async def test_legacy_award_recovery_resumes_from_keyset(monkeypatch):
+    monkeypatch.setattr("app.jobs.award_check.AWARD_INGEST_LIMIT", 2)
+    monkeypatch.setattr("app.jobs.award_check.AWARD_INGEST_MAX_PAGES", 2)
 
-    def test_cursor_is_the_newest_source_backed_date(self):
-        resolved = [
-            _resolve_award_date("2025-06-01", None, DISCOVERED, NOW),
-            _resolve_award_date("2025-08-20", None, DISCOVERED, NOW),
-            _resolve_award_date("2025-07-04", None, DISCOVERED, NOW),
-        ]
-        assert self._cursor(resolved) == _dt(2025, 8, 20)
+    class Source:
+        def __init__(self):
+            self.legacy = [
+                {"id": "1"}, {"id": "2"}, {"id": "3"}, {"id": "4"}, {"id": "5"},
+            ]
 
-    def test_a_batch_of_only_corrupt_rows_does_not_advance(self):
-        resolved = [_resolve_award_date("2099-01-01", None, DISCOVERED, NOW) for _ in range(3)]
-        assert self._cursor(resolved) is None
+        async def query_awards(self, *, filters, **kwargs):
+            if "created_since" in filters:
+                return []
+            after = filters.get("legacy_after_id")
+            rows = [row for row in self.legacy if after is None or row["id"] > after]
+            return rows[:kwargs["limit"]]
 
-    def test_cursor_never_exceeds_now(self):
-        resolved = [_resolve_award_date(NOW.isoformat(), None, _dt(2099, 1, 1), NOW)]
-        assert self._cursor(resolved) <= NOW
+    source = Source()
+    rows, cursor, complete = await _fetch_awards_for_ingestion(
+        source, DISCOVERED, None, False,
+    )
+    assert [row["id"] for row in rows] == ["1", "2", "3", "4"]
+    assert cursor == "4"
+    assert not complete
+
+    rows, cursor, complete = await _fetch_awards_for_ingestion(
+        source, DISCOVERED, cursor, complete,
+    )
+    assert [row["id"] for row in rows] == ["5"]
+    assert cursor == "5"
+    assert complete

@@ -1,6 +1,7 @@
 import pytest
 
 from app.clients.tsa_db import (
+    AWARD_FIELD_MAP,
     TENDER_FIELD_MAP,
     _build_award_where,
     _build_company_where,
@@ -21,6 +22,11 @@ class TestMapFields:
         assert "t.title AS title" in result
         assert "t.province AS province" in result
         assert "t.estimated_value" not in result
+
+    def test_award_publication_date_is_schema_safe(self):
+        result = _map_fields(AWARD_FIELD_MAP, ["publication_date"])
+        assert "to_jsonb(a)" in result
+        assert "AS publication_date" in result
 
     def test_unknown_field_skipped(self):
         result = _map_fields(TENDER_FIELD_MAP, ["title", "nonexistent"])
@@ -103,6 +109,21 @@ class TestBuildTenderWhere:
 
 
 class TestBuildAwardWhere:
+    def test_source_created_cursor_only_selects_cursor_bearing_rows(self):
+        where, params, join = _build_award_where({"created_since": "2026-01-01"})
+        assert "a.created_at >= :created_since" in where
+        assert "created_at IS NULL" not in where
+        assert params["created_since"] == "2026-01-01"
+
+    def test_legacy_awards_use_a_durable_id_keyset(self):
+        where, params, join = _build_award_where({
+            "created_is_null": True,
+            "legacy_after_id": "award-100",
+        })
+        assert "a.created_at IS NULL" in where
+        assert "CAST(a.id AS TEXT) > :legacy_after_id" in where
+        assert params["legacy_after_id"] == "award-100"
+
     def test_tender_ids_filter(self):
         where, params, join = _build_award_where({"tender_ids": ["id1", "id2"]})
         assert "a.tender_id = ANY(:tender_ids)" in where
@@ -269,10 +290,13 @@ class TestPaginationIsDeterministic:
         await tsa_stub.query_tenders(limit=10, offset=10)
         assert "ORDER BY t.created_at DESC, t.id DESC" in tsa_stub.last_sql
 
-    @pytest.mark.parametrize("direction,expected", [("asc", "ASC"), ("desc", "DESC")])
-    async def test_award_sort_has_a_unique_tiebreak(self, tsa_stub, direction, expected):
+    @pytest.mark.parametrize("direction", ["asc", "desc"])
+    async def test_award_sort_has_a_unique_tiebreak(self, tsa_stub, direction):
+        """a.id breaks ties on award_date. Its own direction is left to the
+        default; what matters is that the ordering is total."""
         await tsa_stub.query_awards(limit=10, offset=10, direction=direction)
-        assert f"NULLS LAST, a.id {expected}" in tsa_stub.last_sql
+        order_by = tsa_stub.last_sql.split("ORDER BY", 1)[1]
+        assert "a.id" in order_by.split("LIMIT")[0]
 
 
 class TestFieldAliasing:

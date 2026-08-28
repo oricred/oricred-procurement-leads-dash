@@ -15,6 +15,11 @@ from app.jobs.award_check import (
 from app.jobs.contact_enrichment import run_contact_enrichment
 from app.jobs.crm_sync import sync_crm
 from app.jobs.discovery import discover_new_tenders
+from app.jobs.historical_backfill import (
+    backfill_historical_awards,
+    backfill_historical_tenders,
+    requalify_existing_award_leads,
+)
 from app.jobs.historical_contacts import sync_historical_contacts_job
 from app.jobs.model_refresh import refresh_timing_model
 from app.jobs.tender_backfill import backfill_stub_tenders
@@ -96,6 +101,24 @@ JOBS: dict[str, JobDefinition] = {
             "fix_corrupted_award_dates", "Fix corrupted award dates",
             "Repair awards with a missing, future or synthesised date",
             fix_corrupted_award_dates, "0 4 * * *",
+        ),
+        JobDefinition(
+            "backfill_historical_awards", "Backfill all historical awards",
+            "Backfill all historical awards (date-chunked, one-time)",
+            backfill_historical_awards, "0 1 * * *",
+            enabled_by_default=False,
+        ),
+        JobDefinition(
+            "backfill_historical_tenders", "Backfill historical tender stubs",
+            "Backfill tender stubs from historical award ingestion",
+            backfill_historical_tenders, "0 2 * * *",
+            enabled_by_default=False,
+        ),
+        JobDefinition(
+            "requalify_award_leads", "Requalify existing award leads",
+            "Reapply current filters to existing automatic award leads",
+            requalify_existing_award_leads, "0 5 * * *",
+            enabled_by_default=False,
         ),
         JobDefinition(
             "backfill_tenders", "Backfill stub tenders",
