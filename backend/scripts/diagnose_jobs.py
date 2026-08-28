@@ -85,13 +85,23 @@ def show_environment() -> None:
     if settings.debug:
         print("    debug is on, so assert_production_safe() is a no-op — this is not a")
         print("    production configuration.")
+    # Always evaluate the real rules, even when debug is on. Printing "passes"
+    # because the guard was skipped is worse than printing nothing: a production
+    # host ran with ORICRED_TSA_DATABASE_URL unset — exactly what the guard
+    # exists to catch — and debug being on is precisely why it never fired.
     try:
-        assert_production_safe(settings)
+        assert_production_safe(settings.model_copy(update={"debug": False}))
         print("  Config guard   : passes")
     except RuntimeError as exc:
-        print("  Config guard   : FAILS — the app would refuse to start:")
+        if settings.debug:
+            print("  Config guard   : WOULD FAIL — only ORICRED_DEBUG is keeping")
+            print("                   this app up. Fix these BEFORE setting")
+            print("                   ORICRED_DEBUG=false, or it will not restart:")
+        else:
+            print("  Config guard   : FAILS — the app would refuse to start:")
         for line in str(exc).splitlines():
-            print(f"      {line}")
+            if line.strip():
+                print(f"      {line.strip()}")
     missing = [n for n in REQUIRED_IN_PRODUCTION if not str(getattr(settings, n)).strip()]
     if missing:
         print(f"  Unset required : {', '.join(missing)}")

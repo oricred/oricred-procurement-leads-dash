@@ -175,7 +175,16 @@ class QualificationService:
                 continue
             result = await handler.evaluate(tender, filter_def.get("rules", []), self.db)
             if not result.passed:
-                logger.info("filter_rejected", filter=filter_name, reason=result.reason, tender_id=tender.api_id)
+                # Debug, not info: discovery evaluates every open tender on
+                # every pass, and most are rejected, so at info this emitted one
+                # line per rejected tender per run — tens of thousands every
+                # fifteen minutes. The caller logs the aggregate instead.
+                logger.debug(
+                    "filter_rejected",
+                    filter=filter_name,
+                    reason=result.reason,
+                    tender_id=tender.api_id,
+                )
                 return result
 
         return FilterResult(passed=True)

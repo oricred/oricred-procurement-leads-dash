@@ -171,10 +171,36 @@ ask for its output — do not infer the answer from the local SQLite file.
 - **Models**: UUID string PKs, `DateTime(timezone=True)` for all timestamps
 - **API routes**: All under `/api` prefix, mounted in `app/api/__init__.py`
 - **Schemas**: Pydantic v2 with `from_attributes = True` for ORM mapping
-- **Scheduler**: APScheduler AsyncIOScheduler, jobs logged to `job_runs` table
+- **Scheduler**: APScheduler AsyncIOScheduler, jobs logged to `job_runs` table.
+  Bookkeeping is best-effort at both ends and never decides whether the job
+  runs: `_record_start` returns `None` if it could not write, and
+  `_record_finish` inserts a row when the opening write never landed. This
+  matters because the failure mode that most needs recording — an exhausted
+  connection pool — is the one that also breaks the recording. A `skipped` row
+  is written when APScheduler declines a fire (`max_instances=1` with a pass
+  still running, or a missed trigger); those are not exceptions, so nothing used
+  to record them and a job that overran its interval looked unscheduled.
+- **Long ingest passes**: preload per chunk, commit per chunk, one session per
+  chunk. `award_check._preload` and `discovery._preload` are the pattern. Never
+  hold one session across a whole pass — the connection pool is shared with every
+  API request, and a pass over 20,000 tenders held one for hours. A preload cache
+  must also carry the set of keys it actually loaded (`DiscoveryCache.loaded_tender_ids`)
+  so a miss can be told apart from "not in scope"; without that distinction the
+  loop inserts a duplicate dependent row for every out-of-scope parent.
 - **Frontend API**: Axios client with Bearer token interceptor, TanStack Query for data fetching
 - **CORS**: `ORICRED_CORS_ORIGINS`, comma-separated. Empty = same-origin only (the standard deployment, since FastAPI serves the SPA); localhost:5173 is added in debug
 - **Stage transition**: Use `POST /opportunities/{id}/transition` (not direct stage PATCH)
+- **Logging**: `app/logging_config.py`, called at import of `app.main` — before
+  `app.database`, so the engine is built with the intended echo setting, and
+  after uvicorn has configured logging, so it overrides whatever uvicorn or a
+  `--log-config` set. It asserts the SQLAlchemy log levels rather than trusting
+  them, and clears any level set on a `sqlalchemy.*` child. `ORICRED_SQL_ECHO`
+  (default false) is the only way to turn statement logging back on; it is
+  deliberately independent of `ORICRED_DEBUG`. Discovery issues 4–6 statements
+  per tender across up to 20,000 tenders every 15 minutes, so the echo is not a
+  debugging convenience at this volume — it filled the production disk in
+  2026-08. Anything logged once per tender belongs at `debug`; log the aggregate
+  at `info` instead, as `tenders_synced` does.
 
 ## Workflow Stages
 ```

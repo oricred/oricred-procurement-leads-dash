@@ -1,8 +1,10 @@
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import structlog
+from apscheduler.events import EVENT_JOB_MAX_INSTANCES, EVENT_JOB_MISSED
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -28,6 +30,8 @@ from app.services.admin_config import get_config
 
 logger = structlog.get_logger()
 scheduler: AsyncIOScheduler | None = None
+# Strong references to in-flight skip records; see _on_execution_skipped.
+_skip_tasks: set[asyncio.Task] = set()
 
 JobHandler = Callable[[], Awaitable[object | None]]
 
@@ -143,32 +147,74 @@ DEFAULT_JOBS: dict[str, dict] = {
 }
 
 
+async def _record_start(job_name: str, started_at: datetime) -> str | None:
+    """Open the JobRun row. Returns None if even that could not be written.
+
+    Bookkeeping must never decide whether the job runs. This used to sit above
+    the try block, so when the connection pool was exhausted the insert raised
+    before the handler was reached: no row was written, the exception went to
+    APScheduler, and Admin -> Jobs showed nothing at all. The failures were
+    hidden exactly when the system was in the worst state.
+    """
+    try:
+        async with async_session() as db:
+            run = JobRun(job_name=job_name, started_at=started_at, status="running")
+            db.add(run)
+            await db.commit()
+            return str(run.id)
+    except Exception as exc:
+        logger.warning("job_run_not_recorded", job=job_name, error=str(exc))
+        return None
+
+
+async def _record_finish(
+    run_id: str | None,
+    job_name: str,
+    started_at: datetime,
+    status: str,
+    *,
+    processed: int | None = None,
+    error: str | None = None,
+) -> None:
+    """Close the JobRun row, inserting one if the opening write never landed.
+
+    Also best-effort: a job that succeeded must not be reported as failed
+    because the bookkeeping could not be written.
+    """
+    try:
+        async with async_session() as db:
+            record = await db.get(JobRun, run_id) if run_id else None
+            if record is None:
+                record = JobRun(job_name=job_name, started_at=started_at)
+                db.add(record)
+            record.status = status
+            record.items_processed = processed
+            record.error = error
+            record.finished_at = datetime.now(timezone.utc)
+            await db.commit()
+    except Exception as exc:
+        logger.error(
+            "job_result_not_recorded", job=job_name, status=status, error=str(exc)
+        )
+
+
 async def run_job(job_name: str, handler: JobHandler):
-    async with async_session() as db:
-        run = JobRun(job_name=job_name, started_at=datetime.now(timezone.utc), status="running")
-        db.add(run)
-        await db.commit()
-        await db.refresh(run)
+    started_at = datetime.now(timezone.utc)
+    run_id = await _record_start(job_name, started_at)
 
     try:
         result = await handler()
-        processed = result if isinstance(result, int) else None
-        async with async_session() as db:
-            record = await db.get(JobRun, run.id)
-            if record:
-                record.status = "success"
-                record.items_processed = processed
-                record.finished_at = datetime.now(timezone.utc)
-                await db.commit()
     except Exception as exc:
         logger.exception("job_failed", job=job_name, error=str(exc))
-        async with async_session() as db:
-            record = await db.get(JobRun, run.id)
-            if record:
-                record.status = "failed"
-                record.error = str(exc)[:500]
-                record.finished_at = datetime.now(timezone.utc)
-                await db.commit()
+        await _record_finish(
+            run_id, job_name, started_at, "failed", error=str(exc)[:500]
+        )
+        return
+
+    await _record_finish(
+        run_id, job_name, started_at, "success",
+        processed=result if isinstance(result, int) else None,
+    )
 
 
 def _job_config(config: dict, job_name: str) -> dict:
@@ -207,9 +253,37 @@ async def configure_scheduler(active_scheduler: AsyncIOScheduler) -> None:
     logger.info("scheduler_configured", jobs=[job.id for job in active_scheduler.get_jobs()])
 
 
+def _on_execution_skipped(event) -> None:
+    """Record a fire that APScheduler declined to run.
+
+    max_instances=1 means a pass still running when the next one is due is
+    skipped, not queued — and a skip is not an exception, so run_job never sees
+    it and nothing reaches job_runs. A job that took longer than its interval
+    therefore looked identical to a job that was never scheduled: no rows, no
+    errors, nothing to read. discover_tenders spent hours in that state.
+    """
+    reason = (
+        "previous run still in progress"
+        if event.code == EVENT_JOB_MAX_INSTANCES
+        else "missed its scheduled time"
+    )
+    logger.warning("job_execution_skipped", job=event.job_id, reason=reason)
+
+    now = datetime.now(timezone.utc)
+    task = asyncio.create_task(
+        _record_finish(None, event.job_id, now, "skipped", error=reason)
+    )
+    # Without a strong reference the loop may collect the task mid-flight.
+    _skip_tasks.add(task)
+    task.add_done_callback(_skip_tasks.discard)
+
+
 async def start_scheduler() -> AsyncIOScheduler:
     global scheduler
     scheduler = AsyncIOScheduler()
+    scheduler.add_listener(
+        _on_execution_skipped, EVENT_JOB_MAX_INSTANCES | EVENT_JOB_MISSED
+    )
     await configure_scheduler(scheduler)
     scheduler.start()
     return scheduler

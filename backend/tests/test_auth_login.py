@@ -11,7 +11,6 @@ refused on the next request — the user landed on the dashboard and was bounced
 straight back to the login screen.
 """
 
-import asyncio
 import uuid
 
 import pytest
