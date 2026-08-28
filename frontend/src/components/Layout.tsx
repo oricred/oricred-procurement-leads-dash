@@ -1,11 +1,12 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { TrendingUp, Columns, LogOut, Activity, Shield, Search, UsersRound, BookOpen, WifiOff } from 'lucide-react';
-import { auth, dashboard } from '../services/api';
+import { auth, clearApiCaches, dashboard } from '../services/api';
 import { useState, useEffect } from 'react';
 
 export default function Layout() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
 
@@ -40,8 +41,12 @@ export default function Layout() {
 
   const isAdmin = user?.role === 'admin';
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     localStorage.removeItem('token');
+    // In-memory query cache and the on-disk service-worker caches both hold
+    // lead and contact data belonging to the person signing out.
+    queryClient.clear();
+    await clearApiCaches();
     navigate('/login');
   };
 
@@ -128,7 +133,7 @@ export default function Layout() {
         {!online && (
           <div className="flex items-center gap-2 px-6 py-2 bg-amber-500/10 border-b border-amber-500/20 text-amber-400 text-xs font-medium">
             <WifiOff className="w-3.5 h-3.5" />
-            You are offline — showing cached data
+            You are offline — reconnect to load leads
           </div>
         )}
         <div className="flex-1 overflow-auto p-6">

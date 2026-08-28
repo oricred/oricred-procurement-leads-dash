@@ -2,7 +2,7 @@ import math
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session

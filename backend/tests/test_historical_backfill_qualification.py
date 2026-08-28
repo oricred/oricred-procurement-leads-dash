@@ -8,11 +8,10 @@ from app.jobs.historical_backfill import (
     _process_award_chunk,
     requalify_existing_award_leads,
 )
-from app.models.company import Company
-from app.models.opportunity import OpportunityAudit
-from app.models.tender import Tender
 from app.models.award import Award
-from app.models.opportunity import Opportunity
+from app.models.company import Company
+from app.models.opportunity import Opportunity, OpportunityAudit
+from app.models.tender import Tender
 from app.services.qualification import FilterResult, QualificationService
 
 

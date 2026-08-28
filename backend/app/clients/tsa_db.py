@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Any
 
 import structlog
@@ -10,6 +9,7 @@ logger = structlog.get_logger()
 # ⚠️ READ-ONLY CONNECTION — This app must NEVER write to the Tenders-SA database.
 # PostgreSQL session is forced to read-only via pool event listener.
 from app.config import settings
+
 TSA_DATABASE_URL = settings.tsa_database_url
 
 # Tenders table field map — our names → TSA DB column names
@@ -403,7 +403,7 @@ class TSADatabase:
 
     READ_ONLY = True  # Safety flag — intentionally no write methods exist
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._engine = create_async_engine(
             TSA_DATABASE_URL,
             echo=False,
@@ -418,7 +418,7 @@ class TSADatabase:
             self._engine, class_=AsyncSession, expire_on_commit=False,
         )
 
-    async def close(self):
+    async def close(self) -> None:
         await self._engine.dispose()
 
     # ── Tenders ──
@@ -647,7 +647,6 @@ class TSADatabase:
             params["company_ids"] = company_ids
         sql += " ORDER BY d.full_name"
         params["limit"] = limit
-        params["offset"] = max(offset, 0)
         sql += " LIMIT :limit"
 
         async with self._session_factory() as session:
@@ -681,7 +680,6 @@ class TSADatabase:
             sql += " WHERE " + " AND ".join(where_parts)
         sql += " ORDER BY kp.full_name"
         params["limit"] = limit
-        params["offset"] = max(offset, 0)
         sql += " LIMIT :limit"
 
         async with self._session_factory() as session:
@@ -707,7 +705,6 @@ class TSADatabase:
             params["organization_ids"] = organization_ids
         sql += " ORDER BY sd.full_name"
         params["limit"] = limit
-        params["offset"] = max(offset, 0)
         sql += " LIMIT :limit"
 
         async with self._session_factory() as session:

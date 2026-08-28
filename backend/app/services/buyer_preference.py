@@ -1,14 +1,10 @@
-from decimal import Decimal
-from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.tender import Tender
-from app.models.award import Award
-from app.models.company import Company
-from app.models.organization import Organization
 from app.models.opportunity import Opportunity
+from app.models.organization import Organization
+from app.models.tender import Tender
 
 
 async def compute_buyer_preference(

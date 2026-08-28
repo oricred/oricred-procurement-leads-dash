@@ -1,17 +1,16 @@
-import structlog
 from datetime import datetime, timezone
 
+import structlog
 from sqlalchemy import select
 
 from app.clients import TSADatabase
 from app.database import async_session
-from app.models.tender import Tender
 from app.models.award import Award
 from app.models.company import Company
 from app.models.opportunity import Opportunity
-from app.models.buyer_relationship import BuyerRelationship
-from app.services.buyer_relationship import compute_relationship
+from app.models.tender import Tender
 from app.services.buyer_preference import compute_buyer_preference
+from app.services.buyer_relationship import compute_relationship
 from app.services.funding_suitability import compute_funding_suitability
 from app.services.lead_scoring import refresh_lead_scoring
 from app.services.text_utils import best_title

@@ -5,11 +5,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import Base
 from app.jobs.discovery import _process_tender
+from app.models.past_due import PastDueQueue
 from app.models.tender import Tender
 from app.models.watchlist import WatchlistItem
-from app.models.past_due import PastDueQueue
-from app.services.qualification import FilterResult, QualificationService
 from app.services.award_timing import AwardTimingService
+from app.services.qualification import FilterResult, QualificationService
 
 
 async def test_existing_tender_is_updated_and_watchlist_is_not_duplicated(monkeypatch):

@@ -4,6 +4,7 @@ from typing import Any
 
 import httpx
 import structlog
+
 from app.config import settings
 
 logger = structlog.get_logger()
@@ -14,7 +15,7 @@ class TSAClient:
     MAX_RETRIES = 3
     RETRY_DELAYS = [1, 4, 16]
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._client = httpx.AsyncClient(
             base_url=self.BASE_URL,
             headers={"Authorization": f"Bearer {settings.tsa_api_key}"},
@@ -22,9 +23,8 @@ class TSAClient:
             limits=httpx.Limits(max_keepalive_connections=10, max_connections=50),
         )
 
-    async def request(self, method: str, path: str, **kwargs: Any) -> dict:
+    async def request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         last_exception: Exception | None = None
-        last_status = None
         for attempt in range(self.MAX_RETRIES + 1):
             try:
                 response = await self._client.request(method, path, **kwargs)
@@ -34,9 +34,10 @@ class TSAClient:
                     await asyncio.sleep(retry_after)
                     continue
                 response.raise_for_status()
-                return response.json()
+                payload: dict[str, Any] = response.json()
+                return payload
             except httpx.HTTPStatusError as e:
-                last_status = e.response.status_code
+                last_exception = e
                 if e.response.status_code in (401, 403, 404):
                     logger.error("api_auth_error", status=e.response.status_code, path=path)
                     raise
@@ -59,7 +60,9 @@ class TSAClient:
             await self._record_failure(method, path, kwargs, str(last_exception), self.MAX_RETRIES + 1)
         raise last_exception  # type: ignore
 
-    async def _record_failure(self, method: str, path: str, params: dict, error: str, attempts: int):
+    async def _record_failure(
+        self, method: str, path: str, params: dict[str, Any], error: str, attempts: int
+    ) -> None:
         try:
             from app.database import async_session
             from app.models.failed_api_call import FailedApiCall
@@ -76,5 +79,5 @@ class TSAClient:
         except Exception as e:
             logger.warning("failed_to_record_api_failure", error=str(e))
 
-    async def close(self):
+    async def close(self) -> None:
         await self._client.aclose()

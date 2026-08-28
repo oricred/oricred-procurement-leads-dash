@@ -6,10 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.tsa_db import TSADatabase
 from app.database import async_session
-from app.models.opportunity import Opportunity, OpportunityAudit
 from app.models.contact import Contact
+from app.models.opportunity import Opportunity, OpportunityAudit
 from app.models.tender import Tender
-from app.services.contact_enrichment import enrich_company_contacts_by_id
+from app.services.contact_enrichment import EnrichmentResult, enrich_company_contacts_by_id
 from app.services.lead_scoring import refresh_lead_scoring
 from app.workflow import LEGACY_STAGE_MAP, WORKFLOW_STAGES, normalize_stage
 
@@ -33,22 +33,22 @@ async def retry_contact_lookup_for_opportunity(
     opportunity_id: str,
     db: AsyncSession,
     tsa_db: TSADatabase | None = None,
-) -> tuple[Opportunity, int]:
+) -> tuple[Opportunity, EnrichmentResult]:
     opp = await db.get(Opportunity, opportunity_id)
     if not opp:
         raise ValueError("Opportunity not found")
 
-    added = 0
+    result = EnrichmentResult()
     owns_client = tsa_db is None
     client = tsa_db or TSADatabase()
     try:
         if opp.company_id:
-            added = await enrich_company_contacts_by_id(opp.company_id, client)
+            result = await enrich_company_contacts_by_id(opp.company_id, client)
         opp.last_contact_lookup_at = datetime.now(timezone.utc)
         await refresh_lead_scoring(opp, db)
         await db.commit()
         await db.refresh(opp)
-        return opp, added
+        return opp, result
     finally:
         if owns_client:
             await client.close()

@@ -1,6 +1,8 @@
 # Oricred Project Guide
 
-> **The code is the source of truth.** Specification documents under `docs/specifications/` are historical artifacts describing what was originally intended. The actual implementation may differ — always verify against running code.
+> **The code is the source of truth.** The `phase-*` specification documents under `docs/specifications/` are historical artifacts describing what was originally intended. The actual implementation may differ — always verify against running code.
+>
+> **Exception:** the `remediation-*` specs are *forward-looking* and describe work that has **not** been implemented yet. They document 34 defects found in the 2026-08-27 review of commit `9de20fd`, with the fix for each. Start at [`remediation-00-overview.md`](docs/specifications/remediation-00-overview.md). Several sections of this file are known to be inaccurate and are corrected there — see remediation-07 §2 before trusting the Award Date Domain Rules, admin tab count, CORS, N+1, or test-count claims below.
 
 ## Tech Stack
 - **Backend**: Python 3.12, FastAPI, SQLAlchemy 2.0 (async), APScheduler, httpx, Pydantic v2
@@ -101,13 +103,22 @@ oricred/
 │   ├── repo.md                  # GitHub repo URL
 │   ├── contract-p2b.md         # Phase 2b contract
 │   ├── openapi.json             # Auto-generated API spec
-│   └── specifications/          # Historical spec documents
+│   └── specifications/          # Spec documents
 │       ├── phase-1-core-platform.md
 │       ├── phase-1b-soe-gazette-gap-fill.md
 │       ├── phase-2-municipalities-crm.md
 │       ├── phase-2b-ui-navigation-awards-tenders.md
 │       ├── phase-3-predictive-intelligence.md
-│       └── award-data-enrichment.md
+│       ├── award-data-enrichment.md
+│       ├── contact-editing.md
+│       └── remediation-00-overview.md   # ── Remediation phase (2026-08, NOT YET IMPLEMENTED)
+│           ├── remediation-01-contact-enrichment-restoration.md
+│           ├── remediation-02-security-hardening.md
+│           ├── remediation-03-ingestion-correctness.md
+│           ├── remediation-04-query-performance.md
+│           ├── remediation-05-integrations-and-delivery.md
+│           ├── remediation-06-import-and-export.md
+│           └── remediation-07-engineering-hygiene.md
 └── AGENTS.md                    # This file
 ```
 

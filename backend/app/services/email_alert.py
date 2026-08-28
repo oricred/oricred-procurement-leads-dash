@@ -3,6 +3,7 @@ import smtplib
 from email.mime.text import MIMEText
 
 import structlog
+
 from app.config import settings
 
 logger = structlog.get_logger()

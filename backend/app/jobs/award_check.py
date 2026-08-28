@@ -7,7 +7,6 @@ from typing import Any
 import structlog
 from sqlalchemy import or_, select
 
-
 from app.utils import MAX_VALID_YEAR, parse_datetime
 
 
@@ -31,11 +30,15 @@ from app.models.past_due import PastDueQueue
 from app.models.tender import Tender
 from app.models.watchlist import WatchlistItem
 from app.services.buyer_preference import compute_buyer_preference
+from app.services.contact_enrichment import RECOVERABLE
 from app.services.crm.sync import push_opportunity_to_crm
 from app.services.email_alert import EmailAlertService
 from app.services.funding_suitability import compute_funding_suitability
 from app.services.lead_scoring import refresh_lead_scoring
-from app.services.lead_service import retry_contact_lookup_for_opportunity, retry_new_lead_contact_lookups
+from app.services.lead_service import (
+    retry_contact_lookup_for_opportunity,
+    retry_new_lead_contact_lookups,
+)
 from app.services.qualification import QualificationService
 from app.services.text_utils import best_title
 from app.workflow import WORKFLOW_STAGES
@@ -65,6 +68,9 @@ ORGANIZATION_FIELDS = [
 # Award publication may be delayed or corrected by a source. Re-reading this
 # window makes the ingestion idempotent while keeping the scheduled query bounded.
 AWARD_INGEST_LOOKBACK_DAYS = 30
+# Every run re-reads this much already-seen history, so a late-published award
+# cannot fall through the boundary between two runs.
+AWARD_INGEST_OVERLAP_DAYS = 3
 AWARD_INGEST_LIMIT = 5_000
 AWARD_INGEST_MAX_PAGES = 20
 
@@ -79,6 +85,17 @@ def _award_api_id(raw: dict) -> str:
         return str(raw["id"])
     identity = "|".join(str(raw.get(key) or "") for key in ("tender_id", "supplier_name", "award_date", "amount"))
     return f"award:{hashlib.sha1(identity.encode('utf-8')).hexdigest()[:32]}"
+
+
+def _as_aware(value: datetime | None) -> datetime | None:
+    """Treat a naive datetime as UTC.
+
+    The cursor is read back from the database. PostgreSQL returns it aware,
+    SQLite naive, and comparing the two raises.
+    """
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=timezone.utc)
 
 
 def _parse_lenient(value: Any) -> datetime | None:
@@ -209,6 +226,9 @@ async def _upsert_tender_for_award(db, raw: dict, metadata: dict | None, now: da
             closing_date=parse_datetime(metadata.get("closing_date")),
             buyer_org_id=buyer_org_id,
             tender_type=metadata.get("type"),
+            # parse_datetime, matching closing_date above and the update branch
+            # below. Passing the raw value here skipped the MAX_VALID_YEAR guard
+            # and fails outright whenever the source hands back a string.
             published_at=parse_datetime(metadata.get("publication_date")),
             discovered_at=now,
         )
@@ -349,9 +369,11 @@ async def check_awards_for_watching(backfill: bool = False):
         async with async_session() as db:
             now = datetime.now(timezone.utc)
             new_opportunity_ids: list[str] = []
+            # The cursor reads source_created_at, not the resolved award date —
+            # a synthesised date cannot reach the watermark at all.
             ingested_award_timestamps: list[datetime] = []
             state = await db.get(AwardIngestionState, "tenders_sa")
-            watermark = state.latest_award_at if state and state.latest_award_at else now
+            watermark = _as_aware(state.latest_award_at) if state and state.latest_award_at else now
             since = (
                 now - timedelta(days=AWARD_INGEST_LOOKBACK_DAYS)
                 if backfill
@@ -473,7 +495,11 @@ async def check_awards_for_watching(backfill: bool = False):
                 await refresh_lead_scoring(opp, db, tender=tender, award=award, company=company, contacts=[])
                 opp.related_bidders = [
                     {"name": name, "inferred": False, "reason": "confirmed bidder"}
-                    for name in bidders_by_tender.get(tender.api_id, []) if name.lower() != supplier.lower()
+                    # Keyed by the Tenders-SA row UUID (a.tender_id == t.id),
+                    # which is what query_bidders returned. tender.api_id holds
+                    # the business reference (t.tender_id) and never matches.
+                    for name in bidders_by_tender.get(str(raw.get("tender_id") or ""), [])
+                    if name.lower() != supplier.lower()
                 ] or None
                 new_opportunity_ids.append(str(opp.id))
                 await email.send(
@@ -484,38 +510,56 @@ async def check_awards_for_watching(backfill: bool = False):
                 )
 
             await _mark_overdue_watches(db, email, now)
+            # Compute the watermark first, then create or advance the state row.
+            # Initialising a fresh row to `now` made every ingested timestamp
+            # fail the `>` comparison below, so the cursor pinned itself to today
+            # and the window degenerated to a rolling lookback that can never
+            # catch a late-published older award — the H1 defect by another route.
+            valid_timestamps = [
+                ts for ts in (_as_aware(t) for t in ingested_award_timestamps) if ts and ts <= now
+            ]
+            latest_award_at = max(valid_timestamps) if valid_timestamps else None
+            if ingested_award_timestamps and not valid_timestamps:
+                logger.warning(
+                    "all_award_source_timestamps_in_future",
+                    count=len(ingested_award_timestamps),
+                )
+
             if not state:
                 state = AwardIngestionState(
                     source="tenders_sa",
-                    latest_award_at=now,
+                    latest_award_at=latest_award_at or now,
                 )
                 db.add(state)
-            if ingested_award_timestamps:
-                valid_timestamps = [ts for ts in ingested_award_timestamps if ts <= now]
-                if valid_timestamps:
-                    latest_award_at = max(valid_timestamps)
-                    if not state.latest_award_at or latest_award_at > state.latest_award_at:
-                        state.latest_award_at = latest_award_at
-                else:
-                    logger.warning("all_award_source_timestamps_in_future", count=len(ingested_award_timestamps))
+            elif latest_award_at and (
+                not state.latest_award_at
+                or latest_award_at > _as_aware(state.latest_award_at)
+            ):
+                state.latest_award_at = latest_award_at
             state.legacy_after_id = legacy_after_id
             state.legacy_recovery_complete = legacy_recovery_complete
             await db.commit()
 
             contacts_added = 0
+            lookup_errors = 0
             for opportunity_id in new_opportunity_ids:
                 try:
                     async with async_session() as lookup_db:
-                        _, added = await retry_contact_lookup_for_opportunity(opportunity_id, lookup_db, tsa_db)
-                        contacts_added += added
+                        _, lookup = await retry_contact_lookup_for_opportunity(
+                            opportunity_id, lookup_db, tsa_db
+                        )
+                        contacts_added += lookup.added
+                        lookup_errors += lookup.errors
                     await push_opportunity_to_crm(opportunity_id)
-                except Exception as exc:
+                except RECOVERABLE as exc:
+                    lookup_errors += 1
                     logger.warning("lead_post_create_sync_failed", opportunity_id=opportunity_id, error=str(exc))
 
             retry_processed = await retry_new_lead_contact_lookups(limit=100)
             logger.info(
                 "award_ingestion_complete", source="tenders_sa", since=since.isoformat(), awards_checked=len(raw_awards),
                 leads_created=len(new_opportunity_ids), contacts_added=contacts_added,
+                lookup_errors=lookup_errors,
                 contact_retry_processed=retry_processed,
             )
             return len(raw_awards)
@@ -563,13 +607,12 @@ async def find_corrupted_award_dates(db=None) -> list[Award]:
 
 
 async def fix_corrupted_award_dates() -> int:
-    """Repair awards with NULL or obviously-wrong award_date.
+    """Repair awards with a NULL or obviously-wrong award_date.
 
-    Re-parses the raw payload and applies _resolve_award_date, which
-    aggressively recovers a usable date using year correction (via
-    reference years from pub_date, tender dates, or discovered_at),
-    then falls back to the best available proxy. Returns the count of
-    awards whose award_date actually changed.
+    Re-parses the raw payload through _resolve_award_date, which prefers the
+    source date, falls back to the source's created_at, and finally to our own
+    discovery timestamp. Returns the count of awards whose date actually
+    changed.
     """
 
     async with async_session() as db:
@@ -582,8 +625,10 @@ async def fix_corrupted_award_dates() -> int:
         for award in rows:
             original = award.award_date
 
-            t_result = await db.execute(select(Tender).where(Tender.id == award.tender_id))
-            tender = t_result.scalar_one_or_none()
+            # Reference dates for year correction; see _resolve_award_date.
+            tender = (
+                await db.execute(select(Tender).where(Tender.id == award.tender_id))
+            ).scalar_one_or_none()
 
             recovered = _resolve_award_date(
                 award.raw_payload.get("award_date") if award.raw_payload else None,

@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.opportunity import Opportunity
-from app.models.watchlist import WatchlistItem
 from app.models.past_due import PastDueQueue
+from app.models.watchlist import WatchlistItem
 from app.schemas.dashboard import DashboardStats, StageCount
 from app.workflow import WORKFLOW_STAGES, normalize_stage
 

@@ -5,6 +5,52 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.filter_config import FilterConfig
 
+# ── Secret masking ──
+#
+# GET /admin/credentials must never leak any part of a stored secret, and a PUT
+# that echoes the masked value back must be understood as "leave this unchanged".
+#
+# The previous mask was `value[:4] + "****"`, while the write-side guard tested
+# `startswith("****")`. That guard never matched, so saving the Admin form wrote
+# each mask back over the real credential and destroyed it. The sentinel below is
+# a fixed string with no prefix of the real value, so the round-trip is
+# unambiguous in both directions.
+SECRET_SENTINEL = "•" * 12
+SECRET_KEY_MARKERS = ("key", "password", "secret", "token")
+
+
+def is_secret_field(name: str) -> bool:
+    """True for config keys whose value must never be returned to a client."""
+    lowered = name.lower()
+    return any(marker in lowered for marker in SECRET_KEY_MARKERS)
+
+
+def mask_secrets(config: dict) -> dict:
+    """Replace every set secret with the sentinel. Non-secret fields pass through."""
+    return {
+        key: (
+            SECRET_SENTINEL
+            if is_secret_field(key) and isinstance(value, str) and value
+            else value
+        )
+        for key, value in config.items()
+    }
+
+
+def merge_secrets(incoming: dict, stored: dict) -> dict:
+    """Apply an incoming credentials payload over the stored one.
+
+    A value equal to SECRET_SENTINEL means "unchanged" and keeps the stored
+    value. An empty string means "clear this credential". Anything else is a
+    new value.
+    """
+    merged = dict(stored)
+    for key, value in incoming.items():
+        if isinstance(value, str) and value == SECRET_SENTINEL:
+            continue
+        merged[key] = value
+    return merged
+
 
 DEFAULT_CREDENTIALS = {
     "tsa_api_key": "",

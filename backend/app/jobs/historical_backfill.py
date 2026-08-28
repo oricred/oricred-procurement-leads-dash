@@ -5,10 +5,20 @@ from typing import Any
 import structlog
 from sqlalchemy import select
 
-from app.utils import parse_datetime
-
 from app.clients import TSADatabase
 from app.database import async_session
+from app.jobs.award_check import (
+    AWARD_FIELDS,
+    AWARD_INGEST_LIMIT,
+    COMPANY_FIELDS,
+    ORGANIZATION_FIELDS,
+    TENDER_FIELDS,
+    _award_api_id,
+    _resolve_award_date,
+    _sanitize,
+    _upsert_awarded_company,
+    _upsert_tender_for_award,
+)
 from app.models.award import Award
 from app.models.award_ingestion_state import AwardIngestionState
 from app.models.company import Company
@@ -20,20 +30,8 @@ from app.services.buyer_preference import compute_buyer_preference
 from app.services.funding_suitability import compute_funding_suitability
 from app.services.lead_scoring import refresh_lead_scoring
 from app.services.qualification import QualificationService
+from app.utils import parse_datetime
 from app.workflow import WORKFLOW_STAGES, normalize_stage
-
-from app.jobs.award_check import (
-    _award_api_id,
-    _resolve_award_date,
-    _sanitize,
-    _upsert_awarded_company,
-    _upsert_tender_for_award,
-    AWARD_FIELDS,
-    AWARD_INGEST_LIMIT,
-    COMPANY_FIELDS,
-    ORGANIZATION_FIELDS,
-    TENDER_FIELDS,
-)
 
 logger = structlog.get_logger()
 
@@ -278,7 +276,7 @@ async def _process_award_chunk(
     now: datetime,
 ) -> tuple[int, int]:
     """Process a batch of awards: upsert tenders, companies, orgs, awards, opportunities.
-    
+
     Returns (created_count, skipped_count).
     """
     await _batch_upsert_organizations(db, tsa_db, org_ids, now)
@@ -513,7 +511,7 @@ async def backfill_historical_awards() -> int:
 
 async def backfill_historical_tenders() -> int:
     """Backfill full tender data for stubs created during historical award ingestion.
-    
+
     Finds tenders with NULL province (the stub marker) and resolves them from TSA DB.
     Reuses the same logic as tender_backfill.backfill_stub_tenders().
     """

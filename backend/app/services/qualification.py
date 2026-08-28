@@ -1,15 +1,13 @@
-import json
 from abc import ABC, abstractmethod
 from decimal import Decimal
-from typing import Any
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.filter_config import FilterConfig
 from app.models.award import Award
 from app.models.company import Company
+from app.models.filter_config import FilterConfig
 from app.models.tender import Tender
 
 logger = structlog.get_logger()

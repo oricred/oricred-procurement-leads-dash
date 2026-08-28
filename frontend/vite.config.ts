@@ -43,13 +43,24 @@ export default defineConfig({
             },
           },
           {
-            urlPattern: /^\/api\/.*/i,
-            handler: 'NetworkFirst',
+            // Reference data only — no personal data, safe to persist on disk.
+            //
+            // Everything else under /api/ is deliberately NOT cached. The
+            // previous blanket /^\/api\// rule wrote lead and contact records
+            // (names, direct numbers, personal email addresses of third
+            // parties) into Cache Storage, where they survived logout and were
+            // readable by the next user of a shared machine.
+            //
+            // Adding an endpoint here means asserting its response contains no
+            // personal data. Caches named api-* are cleared on logout by
+            // clearApiCaches() in src/services/api.ts.
+            urlPattern: /^\/api\/(organizations|categories|tenders\/provinces)$/i,
+            handler: 'StaleWhileRevalidate',
             options: {
-              cacheName: 'api-cache',
-              expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 },
-              networkTimeoutSeconds: 10,
-              cacheableResponse: { statuses: [0, 200] },
+              cacheName: 'api-reference',
+              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 },
+              // Status 0 is an opaque response; never cache one.
+              cacheableResponse: { statuses: [200] },
             },
           },
           {

@@ -14,8 +14,8 @@ from app.schemas.stats import (
     ProvinceCount,
     SourceCount,
     StageCount,
-    StatusCount,
     StatsResponse,
+    StatusCount,
     YearlyCount,
     YearlyValue,
 )

@@ -1,4 +1,4 @@
-from app.services.competitor_intel import CompetitorIntelService, Competitor
+from app.services.competitor_intel import Competitor
 
 
 class TestCompetitorDataclass:

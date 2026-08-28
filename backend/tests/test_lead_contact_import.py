@@ -5,10 +5,9 @@ from openpyxl import Workbook
 
 from app.schemas.contact import ContactCreate
 from app.services.lead_contact_import import (
+    ImportRow,
     _canonicalise_row,
     _metadata_notes,
-    COLUMN_ALIASES,
-    ImportRow,
     parse_import_file,
 )
 
@@ -134,3 +133,105 @@ def test_parse_xlsx_with_company_name_alias() -> None:
     rows = parse_import_file("enriched.xlsx", content.getvalue())
     assert rows[0].values["company"] == "Acme Ltd"
     assert rows[0].values["contact_email"] == "jane@acme.com"
+
+
+class TestAmbiguousCompanyNames:
+    """Regression guard for the H4 defect.
+
+    _find_company_and_opportunity called scalar_one_or_none() on an ilike match.
+    Two companies sharing a name raised MultipleResultsFound, which nothing
+    handled — an opaque HTTP 500 partway through an operator's import. Duplicate
+    supplier names are routine: the award pipeline creates `provisional:`
+    companies and the historical sync creates `historical:` ones alongside
+    canonical rows with the same name.
+    """
+
+    @staticmethod
+    async def _companies(session_factory, rows):
+        from app.models.company import Company
+
+        async with session_factory() as db:
+            for api_id, name in rows:
+                db.add(Company(api_id=api_id, name=name))
+            await db.commit()
+
+    async def test_two_real_companies_skip_the_row_instead_of_raising(self, import_db):
+        from app.services.lead_contact_import import _find_company_and_opportunity
+
+        await self._companies(import_db, [
+            ("tsa-1", "ABC Trading"),
+            ("tsa-2", "ABC Trading"),
+        ])
+        async with import_db() as db:
+            company, _opp, error = await _find_company_and_opportunity("ABC Trading", db)
+
+        assert company is None
+        assert error is not None and "2 companies match" in error
+
+    async def test_a_canonical_row_wins_over_a_provisional_stub(self, import_db):
+        from app.services.lead_contact_import import _find_company_and_opportunity
+
+        await self._companies(import_db, [
+            ("tsa-1", "ABC Trading"),
+            ("provisional:award-9", "ABC Trading"),
+        ])
+        async with import_db() as db:
+            company, _opp, error = await _find_company_and_opportunity("ABC Trading", db)
+
+        assert error is None
+        assert company is not None and company.api_id == "tsa-1"
+
+    async def test_a_unique_name_resolves(self, import_db):
+        from app.services.lead_contact_import import _find_company_and_opportunity
+
+        await self._companies(import_db, [("tsa-1", "Sizwe Construction")])
+        async with import_db() as db:
+            company, _opp, error = await _find_company_and_opportunity("Sizwe Construction", db)
+
+        assert error is None
+        assert company is not None and company.api_id == "tsa-1"
+
+    async def test_wildcards_in_a_name_are_matched_literally(self, import_db):
+        """ilike treated % and _ as wildcards; a supplier named 'A_B' matched 'AxB'."""
+        from app.services.lead_contact_import import _find_company_and_opportunity
+
+        await self._companies(import_db, [("tsa-1", "AxB Trading")])
+        async with import_db() as db:
+            company, _opp, error = await _find_company_and_opportunity("A_B Trading", db)
+
+        assert company is None
+        assert error is None  # simply unknown, not ambiguous
+
+    async def test_an_unknown_name_is_not_an_error(self, import_db):
+        from app.services.lead_contact_import import _find_company_and_opportunity
+
+        async with import_db() as db:
+            company, _opp, error = await _find_company_and_opportunity("Nobody Ltd", db)
+        assert company is None and error is None
+
+
+class TestImportRowLimit:
+    def test_a_file_over_the_row_cap_is_rejected(self):
+        import io as _io
+
+        from app.services.lead_contact_import import MAX_IMPORT_ROWS, parse_import_file
+
+        buf = _io.StringIO()
+        buf.write("company,contact_email\n")
+        for i in range(MAX_IMPORT_ROWS + 1):
+            buf.write(f"Company {i},p{i}@example.com\n")
+
+        with pytest.raises(ValueError, match="Split it into files"):
+            parse_import_file("big.csv", buf.getvalue().encode("utf-8"))
+
+    def test_a_file_at_the_cap_is_accepted(self):
+        import io as _io
+
+        from app.services.lead_contact_import import MAX_IMPORT_ROWS, parse_import_file
+
+        buf = _io.StringIO()
+        buf.write("company,contact_email\n")
+        for i in range(MAX_IMPORT_ROWS):
+            buf.write(f"Company {i},p{i}@example.com\n")
+
+        assert len(parse_import_file("ok.csv", buf.getvalue().encode("utf-8"))) == MAX_IMPORT_ROWS

@@ -17,12 +17,51 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+/**
+ * Caches written by service-worker versions predating the H8 fix. Those held
+ * every /api/ response, lead and contact records included. A returning user
+ * still has one on disk until it is explicitly removed, so this runs at boot
+ * rather than waiting for their next sign-out.
+ */
+const LEGACY_PII_CACHES = ['api-cache'];
+
+export async function purgeLegacyCaches(): Promise<void> {
+  if (!('caches' in window)) return;
+  try {
+    await Promise.all(LEGACY_PII_CACHES.map((name) => caches.delete(name)));
+  } catch {
+    // Best effort; nothing the user can act on.
+  }
+}
+
+/**
+ * Delete every service-worker cache holding API responses.
+ *
+ * Must run on both ways a session ends — the Sign out button and an expired
+ * token — because Cache Storage is keyed by origin, not by user, and survives
+ * logout on a shared machine.
+ *
+ * Best effort: Cache Storage is unavailable over plain HTTP and in some private
+ * browsing modes, and a failure here must never block signing out.
+ */
+export async function clearApiCaches(): Promise<void> {
+  if (!('caches' in window)) return;
+  try {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter((k) => k.startsWith('api-')).map((k) => caches.delete(k)));
+  } catch {
+    // Nothing actionable; the user is signing out either way.
+  }
+}
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('token');
-      window.location.href = '/login';
+      void clearApiCaches().finally(() => {
+        window.location.href = '/login';
+      });
     }
     return Promise.reject(error);
   },
@@ -48,7 +87,7 @@ export const opportunities = {
   update: (id: string, body: { notes?: string; risk_flag?: string; assigned_to?: string }) =>
     api.patch<Opportunity>(`/opportunities/${id}`, body),
   findContact: (id: string) =>
-    api.post<{ opportunity: Opportunity; contacts_added: number }>(`/opportunities/${id}/find-contact`),
+    api.post<{ opportunity: Opportunity; contacts_added: number; lookup_errors: number }>(`/opportunities/${id}/find-contact`),
   markContacted: (id: string, body: { version: number; contact_id?: string; note?: string; changed_by?: string }) =>
     api.post<Opportunity>(`/opportunities/${id}/mark-contacted`, body),
   getAudit: (id: string) =>
@@ -92,6 +131,14 @@ export const watchlist = {
 export const dashboard = {
   stats: () => api.get<DashboardStats>('/dashboard/stats'),
 };
+
+/**
+ * Placeholder returned by GET /admin/credentials for any secret that is set.
+ * Sending it back unchanged on PUT means "keep the stored value"; sending an
+ * empty string clears the credential. Must match SECRET_SENTINEL in
+ * backend/app/services/admin_config.py.
+ */
+export const SECRET_SENTINEL = '•'.repeat(12);
 
 export const admin = {
   getFilterConfig: () => api.get('/admin/filter-config'),

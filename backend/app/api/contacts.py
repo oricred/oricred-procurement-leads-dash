@@ -1,14 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.contact import Contact
 from app.models.company import Company
-from app.models.organization import Organization
+from app.models.contact import Contact
 from app.models.opportunity import Opportunity
+from app.models.organization import Organization
 from app.models.tender import Tender
-from app.schemas.contact import ContactRead, ContactCreate, ContactUpdate
+from app.schemas.contact import ContactCreate, ContactRead, ContactUpdate
 from app.services.lead_scoring import refresh_lead_scoring
 
 router = APIRouter()
@@ -186,7 +186,7 @@ async def list_opportunity_contacts(opportunity_id: str, db: AsyncSession = Depe
 
 
 async def _clear_primary_company_contacts(company_id: str, db: AsyncSession, exclude_id: str | None = None):
-    q = select(Contact).where(Contact.company_id == company_id, Contact.is_primary == True)
+    q = select(Contact).where(Contact.company_id == company_id, Contact.is_primary.is_(True))
     if exclude_id:
         q = q.where(Contact.id != exclude_id)
     result = await db.execute(q)
@@ -195,7 +195,7 @@ async def _clear_primary_company_contacts(company_id: str, db: AsyncSession, exc
 
 
 async def _clear_primary_org_contacts(org_id: str, db: AsyncSession, exclude_id: str | None = None):
-    q = select(Contact).where(Contact.organization_id == org_id, Contact.is_primary == True)
+    q = select(Contact).where(Contact.organization_id == org_id, Contact.is_primary.is_(True))
     if exclude_id:
         q = q.where(Contact.id != exclude_id)
     result = await db.execute(q)

@@ -1,19 +1,19 @@
-import structlog
 from datetime import datetime, timezone
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session
-from app.models.opportunity import Opportunity
-from app.models.tender import Tender
 from app.models.award import Award
 from app.models.company import Company
 from app.models.contact import Contact
+from app.models.opportunity import Opportunity
+from app.models.tender import Tender
+from app.services.admin_config import get_config
 from app.services.crm import CRMAdapter
 from app.services.crm.monday import MondayDotComAdapter
-from app.services.admin_config import get_config
 from app.workflow import WORKFLOW_STAGE_LABELS, normalize_stage
 
 logger = structlog.get_logger()
@@ -87,7 +87,7 @@ async def push_opportunity_to_crm(opportunity_id: str) -> None:
         # Push primary contact info
         if opp.company_id:
             c_result = await db.execute(
-                select(Contact).where(Contact.company_id == opp.company_id, Contact.is_primary == True).limit(1)
+                select(Contact).where(Contact.company_id == opp.company_id, Contact.is_primary.is_(True)).limit(1)
             )
             primary = c_result.scalar_one_or_none()
             if primary:

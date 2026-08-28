@@ -12,17 +12,18 @@ from sqlalchemy.sql.expression import Exists
 from app.api.auth import get_current_user
 from app.database import get_db
 from app.models.award import Award
+from app.models.category import Category
 from app.models.company import Company
 from app.models.opportunity import Opportunity, OpportunityAudit
-from app.models.watchlist import WatchlistItem
 from app.models.organization import Organization
 from app.models.tender import Tender
-from app.models.category import Category
+from app.models.watchlist import WatchlistItem
 from app.schemas.award import AwardItem, AwardsList
 from app.schemas.opportunity import OpportunityRead
-from app.services.lead_scoring import refresh_lead_scoring
 from app.services.buyer_preference import compute_buyer_preference
 from app.services.funding_suitability import compute_funding_suitability
+from app.services.lead_scoring import refresh_lead_scoring
+from app.services.text_utils import write_csv_row
 
 router = APIRouter()
 
@@ -147,13 +148,18 @@ async def export_awards(
     query = _filter_awards(_query_awards(), supplier, buyer_org_id, province, buyer_scope, date_from, date_to, value_min, value_max, source, has_opportunity, watch_context)
     order = SORT_FIELDS.get(sort, Award.award_date)
     rows = await db.execute(query.order_by(order.asc().nulls_last() if direction == "asc" else order.desc().nulls_last()))
-    stream = io.StringIO()
+    stream = io.StringIO(newline="")
     writer = csv.writer(stream)
     writer.writerow(["supplier", "buyer", "tender", "value", "award_date", "bee_level", "source", "lead_state", "contact_readiness"])
     for row in rows:
         item = _item(row)
-        writer.writerow([item.supplier_name, item.buyer_org_name, item.tender_title, item.amount, item.award_date, item.bee_level, item.source, item.lead_state, item.contact_readiness])
-    return StreamingResponse(iter([stream.getvalue()]), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=oricred-awards.csv"})
+        write_csv_row(writer, [item.supplier_name, item.buyer_org_name, item.tender_title, item.amount, item.award_date, item.bee_level, item.source, item.lead_state, item.contact_readiness])
+    # BOM so Excel on Windows renders names with diacritics correctly.
+    return StreamingResponse(
+        iter(["﻿" + stream.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="oricred-awards.csv"'},
+    )
 
 
 @router.post("/awards/{award_id}/lead", response_model=OpportunityRead, status_code=status.HTTP_201_CREATED)

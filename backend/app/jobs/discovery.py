@@ -1,10 +1,9 @@
 from collections.abc import Mapping
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import structlog
 from sqlalchemy import select
-
 
 from app.utils import parse_datetime
 
@@ -20,15 +19,15 @@ def _sanitize(value: Any) -> Any:
 
 from app.clients import TSADatabase
 from app.database import async_session
-from app.models.tender import Tender
 from app.models.category import Category
 from app.models.organization import Organization
-from app.models.watchlist import WatchlistItem
 from app.models.past_due import PastDueQueue
-from app.services.qualification import QualificationService
+from app.models.tender import Tender
+from app.models.watchlist import WatchlistItem
+from app.services.admin_config import get_config
 from app.services.award_timing import AwardTimingService
 from app.services.municipal_scraper import CityOfCapeTownAdapter, CityOfJoburgAdapter
-from app.services.admin_config import get_config
+from app.services.qualification import QualificationService
 from app.services.text_utils import best_title
 
 logger = structlog.get_logger()

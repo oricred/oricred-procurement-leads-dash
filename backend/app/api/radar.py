@@ -1,14 +1,14 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import exists, select, func
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.award import Award
+from app.models.opportunity import Opportunity
 from app.models.past_due import PastDueQueue
 from app.models.tender import Tender
-from app.models.opportunity import Opportunity
 from app.schemas.radar import RadarAward, RadarData
 
 router = APIRouter()
