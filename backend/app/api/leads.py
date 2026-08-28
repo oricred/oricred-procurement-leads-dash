@@ -23,6 +23,9 @@ from app.workflow import LEGACY_STAGE_MAP, is_workflow_stage, normalize_stage
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
+# The export is a deliberate full extract rather than a page, but it is still
+# built entirely in memory, so it needs a ceiling of its own.
+EXPORT_ROW_LIMIT = 50_000
 LEAD_SORTS = ("priority", "newest")
 LEAD_SORT_DEFAULT = "priority"
 
@@ -197,6 +200,14 @@ async def export_leads(
         buyer_org_id, category, risk_flag, next_action, value_min,
         award_recency_days, search, sort, limit=None,
     )
+    if leads.total > EXPORT_ROW_LIMIT:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"That filter matches {leads.total:,} leads. "
+                f"Narrow it to {EXPORT_ROW_LIMIT:,} or fewer."
+            ),
+        )
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)
     writer.writerow(

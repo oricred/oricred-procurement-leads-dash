@@ -325,6 +325,10 @@ class TestTendersEndpoint:
                 buyer_org_id="org-joburg", buyer_org_name="City of Joburg",
                 closing_date=datetime(2026, 7, 26, tzinfo=timezone.utc),
                 published_at=None, tender_type=None, discovered_at=None,
+                # Status, watch flag and linked opportunity are now projected
+                # by the main query rather than fetched per row — see
+                # remediation-04 section 1.
+                status="not_watched", is_watching=False, opportunity_id=None,
             ),
         ]
         result.scalar_one_or_none.return_value = None

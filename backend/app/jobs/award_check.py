@@ -1,13 +1,14 @@
 import hashlib
 from collections import defaultdict
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import structlog
 from sqlalchemy import or_, select
 
-from app.utils import MAX_VALID_YEAR, parse_datetime
+from app.utils import parse_datetime
 
 
 def _sanitize(value: Any) -> Any:
@@ -29,6 +30,8 @@ from app.models.organization import Organization
 from app.models.past_due import PastDueQueue
 from app.models.tender import Tender
 from app.models.watchlist import WatchlistItem
+from app.services.admin_config import get_config
+from app.services.award_history import AwardHistory, load_award_history
 from app.services.buyer_preference import compute_buyer_preference
 from app.services.contact_enrichment import RECOVERABLE
 from app.services.crm.sync import push_opportunity_to_crm
@@ -73,6 +76,25 @@ AWARD_INGEST_LOOKBACK_DAYS = 30
 AWARD_INGEST_OVERLAP_DAYS = 3
 AWARD_INGEST_LIMIT = 5_000
 AWARD_INGEST_MAX_PAGES = 20
+
+# Marker stored on awards.date_source. Only "source" means the date came from
+# Tenders-SA; anything else was synthesised and stays in the repair scan.
+DATE_SOURCE_SOURCE = "source"
+
+
+def _date_provenance(raw_date: object, resolved: datetime) -> str:
+    """Which branch of _resolve_award_date produced this date.
+
+    The resolver returns the strictly parsed source date unchanged when it is
+    valid, so equality identifies a source-backed date. Anything else was
+    year-corrected or substituted from a proxy, and stays in the nightly repair
+    scan — see find_corrupted_award_dates.
+    """
+    direct = parse_datetime(raw_date)
+    return DATE_SOURCE_SOURCE if direct is not None and direct == resolved else DATE_SOURCE_SYNTHESISED
+DATE_SOURCE_SYNTHESISED = "synthesised"
+# Caps one nightly repair run so the job cannot grow unbounded with the table.
+REPAIR_BATCH_SIZE = 5_000
 
 
 def _supplier_fallback_api_id(supplier: str) -> str:
@@ -169,17 +191,120 @@ def _resolve_award_date(
     return resolved_now
 
 
-async def _upsert_awarded_company(db, raw: dict, company_by_name: dict[str, dict], now: datetime) -> Company:
+@dataclass
+class IngestCache:
+    """Local rows this batch may touch, loaded once up front.
+
+    The loop issued a company lookup, an award lookup, a watchlist lookup, an
+    opportunity lookup and up to two tender lookups per award — roughly 30,000
+    queries for a 5,000-award page.
+
+    Rows created during the loop are written back here, so a second award for
+    the same tender or company in the same batch reuses the row rather than
+    inserting a duplicate.
+    """
+
+    tenders: dict[str, Tender]
+    companies: dict[str, Company]
+    awards: dict[str, Award]
+    watches: dict[str, WatchlistItem]
+    opportunity_award_ids: set[str]
+
+
+def _supplier_api_ids(raw_awards: list[dict]) -> set[str]:
+    """Every Company.api_id this batch could resolve to.
+
+    Deterministic from the raw awards, so it is known before any company row
+    exists — which matters because the loop creates them as it goes.
+    """
+    ids = {
+        str(raw["supplier_canonical_id"]) for raw in raw_awards if raw.get("supplier_canonical_id")
+    }
+    ids |= {_supplier_fallback_api_id(raw.get("supplier_name") or "Unknown") for raw in raw_awards}
+    return ids
+
+
+async def _preload(db, raw_awards: list[dict], tender_by_api_id: dict) -> IngestCache:
+    """Load the local rows this batch could touch, keyed for O(1) lookup."""
+    tender_keys: set[str] = set()
+    for raw in raw_awards:
+        row_uuid = str(raw.get("tender_id") or "")
+        if row_uuid:
+            tender_keys.add(row_uuid)
+            reference = (tender_by_api_id.get(row_uuid) or {}).get("tender_id")
+            if reference:
+                tender_keys.add(str(reference))
+
+    award_api_ids = {_award_api_id(raw) for raw in raw_awards}
+    supplier_ids = _supplier_api_ids(raw_awards)
+
+    tenders: dict[str, Tender] = {}
+    if tender_keys:
+        for tender in (
+            await db.execute(select(Tender).where(Tender.api_id.in_(tender_keys)))
+        ).scalars():
+            tenders[tender.api_id] = tender
+
+    awards: dict[str, Award] = {}
+    if award_api_ids:
+        for award in (
+            await db.execute(select(Award).where(Award.api_id.in_(award_api_ids)))
+        ).scalars():
+            awards[award.api_id] = award
+
+    companies: dict[str, Company] = {}
+    if supplier_ids:
+        for company in (
+            await db.execute(select(Company).where(Company.api_id.in_(supplier_ids)))
+        ).scalars():
+            companies[company.api_id] = company
+
+    tender_ids = [t.id for t in tenders.values()]
+    watches: dict[str, WatchlistItem] = {}
+    opportunity_award_ids: set[str] = set()
+    if tender_ids:
+        for watch in (
+            await db.execute(
+                select(WatchlistItem).where(
+                    WatchlistItem.tender_id.in_(tender_ids),
+                    WatchlistItem.status == "watching",
+                )
+            )
+        ).scalars():
+            watches[watch.tender_id] = watch
+    if awards:
+        opportunity_award_ids = set(
+            (
+                await db.execute(
+                    select(Opportunity.award_id).where(
+                        Opportunity.award_id.in_([a.id for a in awards.values()])
+                    )
+                )
+            ).scalars()
+        )
+
+    return IngestCache(tenders, companies, awards, watches, opportunity_award_ids)
+
+
+async def _upsert_awarded_company(
+    db, raw: dict, company_by_name: dict[str, dict], now: datetime,
+    cache: IngestCache | None = None,
+) -> Company:
     supplier = raw.get("supplier_name") or "Unknown"
     co_data = company_by_name.get(supplier) or company_by_name.get(supplier.strip().lower()) or {}
     api_id = co_data.get("id") or raw.get("supplier_canonical_id") or _supplier_fallback_api_id(supplier)
 
-    result = await db.execute(select(Company).where(Company.api_id == api_id))
-    company = result.scalar_one_or_none()
+    company = cache.companies.get(api_id) if cache is not None else None
+    if not company:
+        company = (
+            await db.execute(select(Company).where(Company.api_id == api_id))
+        ).scalar_one_or_none()
     if not company:
         company = Company(api_id=api_id, name=co_data.get("name") or supplier)
         db.add(company)
         await db.flush()
+        if cache is not None:
+            cache.companies[api_id] = company
 
     company.name = co_data.get("name") or supplier
     company.bee_level = co_data.get("bbbee_level") or raw.get("bee_level") or company.bee_level
@@ -193,7 +318,9 @@ async def _upsert_awarded_company(db, raw: dict, company_by_name: dict[str, dict
     return company
 
 
-async def _upsert_tender_for_award(db, raw: dict, metadata: dict | None, now: datetime) -> Tender | None:
+async def _upsert_tender_for_award(
+    db, raw: dict, metadata: dict | None, now: datetime, cache: IngestCache | None = None
+) -> Tender | None:
     """Ensure every imported award has local tender context without gating ingestion."""
     award_tender_id = raw.get("tender_id")
     if not award_tender_id:
@@ -204,13 +331,25 @@ async def _upsert_tender_for_award(db, raw: dict, metadata: dict | None, now: da
     biz_tender_id = metadata.get("tender_id")
     buyer_org_id = metadata.get("source_organization_id")
 
+    # Business ID first (matching the discovery job's api_id scheme), then the
+    # TSA row UUID. Both were separate SELECTs per award.
     tender = None
-    # Look up by business ID first (matching discovery job's api_id scheme)
-    if biz_tender_id:
-        tender = (await db.execute(select(Tender).where(Tender.api_id == biz_tender_id))).scalar_one_or_none()
-    if not tender:
-        # Fallback: look up by UUID (the award's tender_id = TSA DB t.id)
-        tender = (await db.execute(select(Tender).where(Tender.api_id == award_tender_id))).scalar_one_or_none()
+    if cache is not None:
+        if biz_tender_id:
+            tender = cache.tenders.get(str(biz_tender_id))
+        if not tender:
+            tender = cache.tenders.get(str(award_tender_id))
+    else:
+        # No batch cache: fall back to per-call lookups. Used by callers outside
+        # the ingest loop, where there is nothing to batch.
+        if biz_tender_id:
+            tender = (
+                await db.execute(select(Tender).where(Tender.api_id == biz_tender_id))
+            ).scalar_one_or_none()
+        if not tender:
+            tender = (
+                await db.execute(select(Tender).where(Tender.api_id == award_tender_id))
+            ).scalar_one_or_none()
 
     if not tender:
         api_id = biz_tender_id or award_tender_id
@@ -234,6 +373,8 @@ async def _upsert_tender_for_award(db, raw: dict, metadata: dict | None, now: da
         )
         db.add(tender)
         await db.flush()
+        if cache is not None:
+            cache.tenders[tender.api_id] = tender
     elif metadata:
         tender.raw_payload = _sanitize(metadata)
         tender.title = best_title(metadata) or tender.title
@@ -248,19 +389,34 @@ async def _upsert_tender_for_award(db, raw: dict, metadata: dict | None, now: da
     return tender
 
 
-async def _upsert_buyer_organization(db, tsa_db: TSADatabase, tender: Tender, now: datetime) -> None:
-    if not tender.buyer_org_id:
+async def _sync_buyer_organizations(
+    db, tsa_db: TSADatabase, org_ids: set[str], now: datetime
+) -> None:
+    """Fetch every buyer organisation for this batch in one query.
+
+    This ran per award, so a 5,000-award page made 5,000 round trips to the
+    external read-only database for an organisation set that is usually a few
+    dozen distinct values repeated over and over.
+    """
+    if not org_ids:
         return
     try:
-        org_results = await tsa_db.query_organizations(
-            filters={"ids": [tender.buyer_org_id]}, fields=ORGANIZATION_FIELDS,
+        rows = await tsa_db.query_organizations(
+            filters={"ids": sorted(org_ids)},
+            fields=ORGANIZATION_FIELDS,
+            limit=max(len(org_ids), 1),
         )
-        if not org_results:
-            return
-        org = org_results[0]
+    except RECOVERABLE as exc:
+        logger.warning("buyer_org_batch_failed", count=len(org_ids), error=str(exc))
+        return
+
+    for org in rows:
+        org_id = org.get("id")
+        if not org_id:
+            continue
         await db.merge(Organization(
-            id=tender.buyer_org_id,
-            name=org.get("name", tender.buyer_org_id),
+            id=org_id,
+            name=org.get("name") or org_id,
             organization_type=org.get("organization_type"),
             contact_email=org.get("contact_email"),
             contact_phone=org.get("contact_phone"),
@@ -270,8 +426,6 @@ async def _upsert_buyer_organization(db, tsa_db: TSADatabase, tender: Tender, no
             raw_payload=_sanitize(org),
             last_refreshed_at=now,
         ))
-    except Exception as exc:
-        logger.warning("buyer_org_upsert_failed", tender_id=tender.api_id, error=str(exc))
 
 
 async def _mark_overdue_watches(db, email: EmailAlertService, now: datetime) -> None:
@@ -296,8 +450,8 @@ async def _mark_overdue_watches(db, email: EmailAlertService, now: datetime) -> 
         if existing.scalar_one_or_none():
             continue
         db.add(PastDueQueue(tender_id=tender.id, entered_queue_at=now))
-        await email.send(
-            "past_due", "ops@oricred.com", tender_title=tender.title,
+        await email.queue(
+            "past_due", tender_title=tender.title,
             buyer_org=tender.buyer_org_id or "", category=tender.category_id or "",
             window_start=str(watch.expected_window_start), window_end=str(watch.expected_window_end),
             days_overdue=str((now - watch.expected_window_end).days), dashboard_url="/watchlist",
@@ -362,11 +516,12 @@ async def check_awards_for_watching(backfill: bool = False):
     the award feed or prevents an awarded supplier from becoming a lead.
     """
     tsa_db = TSADatabase()
-    email = EmailAlertService()
     logger.info("job_started", job="ingest_awards")
 
     try:
         async with async_session() as db:
+            # Recipients and per-event toggles live in Admin -> Notifications.
+            email = await EmailAlertService.from_config(db)
             now = datetime.now(timezone.utc)
             new_opportunity_ids: list[str] = []
             # The cursor reads source_created_at, not the resolved award date —
@@ -428,20 +583,49 @@ async def check_awards_for_watching(backfill: bool = False):
                 except Exception as exc:
                     logger.warning("batch_bidder_query_failed", error=str(exc))
 
+            # One query per table instead of one per award, and one remote call
+            # for every buyer organisation instead of one per award.
+            # The scoring config is identical for every opportunity in a run;
+            # loading it per lead cost one query each.
+            buyer_preference_config = (
+                await get_config("admin_scoring", db)
+            ).get("buyer_preference", {})
+
+            cache = await _preload(db, raw_awards, tender_by_api_id)
+
+            # Prior-award aggregates for every supplier in the batch, in one
+            # grouped query. Lead scoring and funding suitability each ran their
+            # own aggregate per company otherwise.
+            award_history = await load_award_history(
+                sorted(_supplier_api_ids(raw_awards)), db
+            )
+            await _sync_buyer_organizations(
+                db,
+                tsa_db,
+                {
+                    str(meta["source_organization_id"])
+                    for meta in tender_by_api_id.values()
+                    if meta.get("source_organization_id")
+                },
+                now,
+            )
+
             for raw in raw_awards:
-                tender = await _upsert_tender_for_award(db, raw, tender_by_api_id.get(str(raw.get("tender_id"))), now)
+                tender = await _upsert_tender_for_award(
+                    db, raw, tender_by_api_id.get(str(raw.get("tender_id"))), now, cache
+                )
                 if not tender:
                     continue
-                company = await _upsert_awarded_company(db, raw, company_by_name, now)
+                company = await _upsert_awarded_company(db, raw, company_by_name, now, cache)
                 supplier = raw.get("supplier_name") or "Unknown"
-                await _upsert_buyer_organization(db, tsa_db, tender, now)
 
                 award_api_id = _award_api_id(raw)
-                award = (await db.execute(select(Award).where(Award.api_id == award_api_id))).scalar_one_or_none()
+                award = cache.awards.get(award_api_id)
                 if not award:
                     award = Award(api_id=award_api_id, tender_id=tender.id, supplier_name=supplier, source="tenders_api", discovered_at=now)
                     db.add(award)
                     await db.flush()
+                    cache.awards[award_api_id] = award
                 award.tender_id = tender.id
                 award.raw_payload = _sanitize(raw)
                 award.supplier_name = supplier
@@ -456,6 +640,7 @@ async def check_awards_for_watching(backfill: bool = False):
                     tender_published_at=tender.published_at,
                     tender_closing_date=tender.closing_date,
                 )
+                award.date_source = _date_provenance(raw.get("award_date"), award.award_date)
                 award.bee_level = raw.get("bee_level")
                 award.bee_points = raw.get("bee_points")
                 award.buyer_org_id = tender.buyer_org_id
@@ -464,13 +649,12 @@ async def check_awards_for_watching(backfill: bool = False):
                     ingested_award_timestamps.append(timestamp)
 
                 # Watchlist matching happens after the Tenders-SA award was stored.
-                watch = (await db.execute(select(WatchlistItem).where(WatchlistItem.tender_id == tender.id, WatchlistItem.status == "watching"))).scalar_one_or_none()
+                watch = cache.watches.pop(tender.id, None)
                 if watch:
                     watch.status = "awarded"
                     watch.awarded_at = now
 
-                existing_opp = await db.execute(select(Opportunity).where(Opportunity.award_id == award.id))
-                if existing_opp.scalar_one_or_none():
+                if award.id in cache.opportunity_award_ids:
                     continue
                 qualification = await QualificationService(db).evaluate_award_lead(
                     tender, award, company,
@@ -484,15 +668,28 @@ async def check_awards_for_watching(backfill: bool = False):
                         reason=qualification.reason,
                     )
                     continue
+                cache.opportunity_award_ids.add(award.id)
                 opp = Opportunity(
                     tender_id=tender.id, award_id=award.id, company_id=company.id,
                     kanban_stage=WORKFLOW_STAGES[0], contact_sufficiency="none", risk_flag="green",
                 )
                 db.add(opp)
                 await db.flush()
-                opp.buyer_preference_score = await compute_buyer_preference(str(opp.id), db)
-                opp.funding_suitability = await compute_funding_suitability(company.id, db)
-                await refresh_lead_scoring(opp, db, tender=tender, award=award, company=company, contacts=[])
+                opp.buyer_preference_score = await compute_buyer_preference(
+                    str(opp.id), db, config=buyer_preference_config, opp=opp, tender=tender
+                )
+                # Plus the award just inserted, matching what the per-lead
+                # query used to see.
+                history = (award_history.get(company.api_id) or AwardHistory()).including(
+                    award.amount, recent=award.award_date >= now - timedelta(days=365)
+                )
+                opp.funding_suitability = await compute_funding_suitability(
+                    company.id, db, company=company, history=history
+                )
+                await refresh_lead_scoring(
+                    opp, db, tender=tender, award=award, company=company,
+                    contacts=[], history=history,
+                )
                 opp.related_bidders = [
                     {"name": name, "inferred": False, "reason": "confirmed bidder"}
                     # Keyed by the Tenders-SA row UUID (a.tender_id == t.id),
@@ -502,14 +699,15 @@ async def check_awards_for_watching(backfill: bool = False):
                     if name.lower() != supplier.lower()
                 ] or None
                 new_opportunity_ids.append(str(opp.id))
-                await email.send(
-                    "award_detected", "ops@oricred.com", company_name=supplier,
+                await email.queue(
+                    "award_detected", company_name=supplier,
                     tender_title=tender.title, supplier_name=supplier,
                     amount=float(raw.get("amount", 0) or 0), award_date=str(raw.get("award_date", "")),
                     dashboard_url="/opportunities/" + str(opp.id),
                 )
 
             await _mark_overdue_watches(db, email, now)
+            delivered = await email.flush()
             # Compute the watermark first, then create or advance the state row.
             # Initialising a fresh row to `now` made every ingested timestamp
             # fail the `>` comparison below, so the cursor pinned itself to today
@@ -559,7 +757,7 @@ async def check_awards_for_watching(backfill: bool = False):
             logger.info(
                 "award_ingestion_complete", source="tenders_sa", since=since.isoformat(), awards_checked=len(raw_awards),
                 leads_created=len(new_opportunity_ids), contacts_added=contacts_added,
-                lookup_errors=lookup_errors,
+                lookup_errors=lookup_errors, alerts_delivered=delivered,
                 contact_retry_processed=retry_processed,
             )
             return len(raw_awards)
@@ -568,42 +766,36 @@ async def check_awards_for_watching(backfill: bool = False):
 
 
 async def find_corrupted_award_dates(db=None) -> list[Award]:
-    """Return all awards with NULL, future, or raw-year-corrupted award_date."""
+    """Awards whose date is missing, in the future, or was synthesised.
+
+    Bounded by design. The previous implementation selected every healthy award
+    with a payload, materialised all of them, and filtered in Python by
+    re-parsing the raw JSON year — a full scan of a table that only grows,
+    running nightly.
+
+    date_source records how each award's date was resolved, so a repaired row
+    drops out of this scan permanently and the working set shrinks rather than
+    grows. NULL covers rows written before the column existed; the one-off
+    backfill in app.cli clears those.
+    """
     if db is None:
         async with async_session() as s:
             return await find_corrupted_award_dates(s)
     now = datetime.now(timezone.utc)
-    corrupt = await db.execute(
-        select(Award).where(
+    result = await db.execute(
+        select(Award)
+        .where(
             or_(
                 Award.award_date.is_(None),
                 Award.award_date > now,
+                Award.date_source.is_(None),
+                Award.date_source != DATE_SOURCE_SOURCE,
             )
         )
+        .order_by(Award.discovered_at.desc())
+        .limit(REPAIR_BATCH_SIZE)
     )
-    result: list[Award] = list(corrupt.scalars().all())
-
-    # Also find records whose raw payload has a clearly-corrupt year (> MAX_VALID_YEAR)
-    # even if the stored date was already corrected by a previous recovery run.
-    extras = await db.execute(
-        select(Award).where(
-            Award.raw_payload.isnot(None),
-            Award.award_date.isnot(None),
-            Award.award_date <= now,
-        )
-    )
-    for award in extras.scalars().all():
-        payload = award.raw_payload or {}
-        raw_date = payload.get("award_date") if isinstance(payload, dict) else None
-        if raw_date and isinstance(raw_date, str) and len(raw_date) >= 4:
-            try:
-                raw_year = int(raw_date[:4])
-            except ValueError:
-                continue
-            if raw_year > MAX_VALID_YEAR:
-                result.append(award)
-
-    return result
+    return list(result.scalars().all())
 
 
 async def fix_corrupted_award_dates() -> int:
@@ -636,6 +828,9 @@ async def fix_corrupted_award_dates() -> int:
                 publication_date=award.publication_date,
                 tender_published_at=tender.published_at if tender else None,
                 tender_closing_date=tender.closing_date if tender else None,
+            )
+            award.date_source = _date_provenance(
+                award.raw_payload.get("award_date") if award.raw_payload else None, recovered
             )
             if recovered != original:
                 award.award_date = recovered

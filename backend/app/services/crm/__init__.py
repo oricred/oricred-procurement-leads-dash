@@ -31,6 +31,13 @@ class CRMAdapter(ABC):
     ) -> None: ...
 
     @abstractmethod
+    async def update_columns(
+        self, board_id: str, item_id: str, column_values: dict
+    ) -> None:
+        """Set every column in one request, rather than one request per column."""
+        ...
+
+    @abstractmethod
     async def get_recent_activity(
         self, board_id: str, since: datetime
     ) -> list[Activity]: ...

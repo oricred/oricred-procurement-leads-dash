@@ -6,6 +6,8 @@ shipped — lived here and was invisible precisely because nothing exercised the
 loop from raw award to created opportunity.
 """
 
+from datetime import datetime, timezone
+
 import pytest
 from sqlalchemy import select
 
@@ -15,6 +17,8 @@ from app.models.tender import Tender
 # The two identifiers that the H2 defect conflated.
 TENDER_ROW_UUID = "8f14e45f-ceea-467a-9d1a-1f3f9a0b1c2d"  # TSA t.id, and a.tender_id
 TENDER_REFERENCE = "RFQ-2026-0042"                        # TSA t.tender_id
+
+NOW_UTC = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
 
 @pytest.fixture
@@ -284,3 +288,251 @@ class TestIngestCursor:
         )
 
 
+
+
+class TestCorruptedDateScan:
+    """Regression guard for the M3 defect.
+
+    find_corrupted_award_dates selected every healthy award with a payload,
+    materialised all of them, and filtered in Python by re-parsing the raw JSON
+    year — a full table scan running nightly and growing forever.
+    """
+
+    @staticmethod
+    async def _seed(session_factory, rows):
+        from app.models.award import Award
+
+        async with session_factory() as db:
+            for i, (date_source, award_date) in enumerate(rows):
+                db.add(Award(
+                    id=f"a{i}", api_id=f"api-{i}", tender_id="t1", supplier_name="S",
+                    discovered_at=NOW_UTC, award_date=award_date, date_source=date_source,
+                    raw_payload={"award_date": "2026-06-01"},
+                ))
+            await db.commit()
+
+    async def test_healthy_awards_are_not_scanned(self, ingest_env):
+        from app.jobs.award_check import find_corrupted_award_dates
+
+        await self._seed(ingest_env, [("source", NOW_UTC)] * 5)
+        async with ingest_env() as db:
+            assert await find_corrupted_award_dates(db) == []
+
+    async def test_synthesised_awards_are_scanned(self, ingest_env):
+        from app.jobs.award_check import find_corrupted_award_dates
+
+        await self._seed(ingest_env, [("source", NOW_UTC), ("synthesised", NOW_UTC)])
+        async with ingest_env() as db:
+            found = await find_corrupted_award_dates(db)
+        assert [a.date_source for a in found] == ["synthesised"]
+
+    async def test_unmarked_awards_are_scanned(self, ingest_env):
+        """Rows written before the column existed, until the CLI backfill runs."""
+        from app.jobs.award_check import find_corrupted_award_dates
+
+        await self._seed(ingest_env, [(None, NOW_UTC)])
+        async with ingest_env() as db:
+            assert len(await find_corrupted_award_dates(db)) == 1
+
+    async def test_the_scan_is_bounded(self, ingest_env, monkeypatch):
+        import app.jobs.award_check as award_check
+
+        monkeypatch.setattr(award_check, "REPAIR_BATCH_SIZE", 3)
+        await self._seed(ingest_env, [("synthesised", NOW_UTC)] * 10)
+        async with ingest_env() as db:
+            assert len(await award_check.find_corrupted_award_dates(db)) == 3
+
+    async def test_ingest_records_provenance(self, ingest_env, tsa_stub, monkeypatch):
+        """A repaired award drops out of the scan permanently."""
+        from sqlalchemy import select as _select
+
+        import app.jobs.award_check as award_check
+        from app.models.award import Award
+
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub))
+        await award_check.check_awards_for_watching()
+
+        async with ingest_env() as db:
+            award = (await db.execute(_select(Award))).scalars().one()
+        assert award.date_source == "source"
+
+
+class TestBatching:
+    """Regression guard for the M2 defect.
+
+    The loop issued a company lookup, an award lookup, a watchlist lookup, an
+    opportunity lookup and up to two tender lookups per award, plus one query to
+    the external Tenders-SA database per award for the buyer organisation —
+    roughly 30,000 local queries and 5,000 remote ones for a 5,000-award page.
+    """
+
+    @staticmethod
+    def _awards(count: int) -> list[dict]:
+        return [
+            _award(f"award-{i}", f"Supplier {i}", "2026-06-01")
+            for i in range(count)
+        ]
+
+    async def test_query_count_barely_grows_with_batch_size(
+        self, ingest_env, tsa_stub, monkeypatch
+    ):
+        import app.jobs.award_check as award_check
+
+        counts = {}
+        for size in (2, 40):
+            # A fresh database per size, so the second run is not a no-op.
+            from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+            from sqlalchemy.pool import StaticPool
+
+            import app.database as database
+
+            engine = create_async_engine(
+                "sqlite+aiosqlite://",
+                poolclass=StaticPool,
+                connect_args={"check_same_thread": False},
+            )
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with engine.begin() as conn:
+                await conn.run_sync(database.Base.metadata.create_all)
+
+            issued = 0
+            original = factory
+
+            def counting_factory(*, _f=original):
+                session = _f()
+                inner = session.execute
+
+                async def counting(statement, *args, **kwargs):
+                    nonlocal issued
+                    issued += 1
+                    return await inner(statement, *args, **kwargs)
+
+                session.execute = counting
+                return session
+
+            monkeypatch.setattr(award_check, "async_session", counting_factory)
+            stub = _stub(tsa_stub, awards=self._awards(size))
+            monkeypatch.setattr(award_check, "TSADatabase", lambda: stub)
+
+            await award_check.check_awards_for_watching()
+            counts[size] = issued
+            await engine.dispose()
+
+        # Every lookup and aggregate the loop needs is now batched, so the query
+        # count is flat in the size of the batch. Was roughly 7 local queries per
+        # award plus one remote call each — 285 local queries for 40 awards.
+        marginal = (counts[40] - counts[2]) / (40 - 2)
+        assert marginal <= 0.1, (
+            f"{marginal:.2f} queries per additional award (expected ~0): {counts}"
+        )
+        # Flat, not merely sublinear: a 20x batch must not cost 20x anything.
+        assert counts[40] <= counts[2] + 2, (
+            f"query count grew with the batch: {counts}"
+        )
+
+    async def test_the_buyer_organisation_is_fetched_once_per_run(
+        self, ingest_env, tsa_stub, monkeypatch
+    ):
+        import app.jobs.award_check as award_check
+
+        stub = _stub(tsa_stub, awards=self._awards(10))
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: stub)
+        await award_check.check_awards_for_watching()
+
+        org_queries = [sql for sql, _ in stub.calls if "FROM source_organizations" in sql]
+        assert len(org_queries) == 1, (
+            f"queried the external database {len(org_queries)} times for organisations"
+        )
+
+    async def test_two_awards_for_one_new_tender_create_one_tender(
+        self, ingest_env, tsa_stub, monkeypatch
+    ):
+        """The cache must write new rows back, or a preload would let a second
+        award in the same batch insert a duplicate."""
+        from sqlalchemy import select as _select
+
+        import app.jobs.award_check as award_check
+        from app.models.company import Company
+
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub, awards=[
+            _award("a1", "Sizwe Construction", "2026-06-01"),
+            _award("a2", "Sizwe Construction", "2026-06-02"),
+        ]))
+        await award_check.check_awards_for_watching()
+
+        async with ingest_env() as db:
+            tenders = (await db.execute(_select(Tender))).scalars().all()
+            companies = (await db.execute(_select(Company))).scalars().all()
+            opps = (await db.execute(_select(Opportunity))).scalars().all()
+
+        assert len(tenders) == 1, "the same tender was inserted twice"
+        assert len(companies) == 1, "the same supplier was inserted twice"
+        assert len(opps) == 2, "each award should still produce its own lead"
+
+
+class TestLeadScoringIsUnchanged:
+    """Pins the score the ingest loop produces.
+
+    Batching the per-supplier award aggregates moved when they are read. The old
+    code queried after inserting the current award, so "prior award history"
+    counted it; reading before the insert would not. These tests exist so that
+    difference cannot pass silently — the score drives which leads an operator
+    is shown first.
+    """
+
+    async def test_a_first_time_supplier_scores_as_low_history(
+        self, ingest_env, tsa_stub, monkeypatch
+    ):
+        from sqlalchemy import select as _select
+
+        import app.jobs.award_check as award_check
+
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub))
+        await award_check.check_awards_for_watching()
+
+        async with ingest_env() as db:
+            opp = (await db.execute(_select(Opportunity))).scalars().one()
+        assert "Low prior award history" in (opp.lead_priority_reasons or [])
+
+    async def test_a_supplier_with_prior_awards_scores_lower(
+        self, ingest_env, tsa_stub, monkeypatch
+    ):
+        """Two awards to one supplier: the second must see the first."""
+        from sqlalchemy import select as _select
+
+        import app.jobs.award_check as award_check
+        from app.models.award import Award
+
+        # A large prior award already on file for this supplier.
+        async with ingest_env() as db:
+            db.add(Award(
+                id="prior", api_id="prior", tender_id="t-prior", supplier_name="Sizwe Construction",
+                supplier_company_id="tsa-company-1", amount=9_000_000,
+                award_date=NOW_UTC, discovered_at=NOW_UTC, date_source="source",
+            ))
+            await db.commit()
+
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub))
+        await award_check.check_awards_for_watching()
+
+        async with ingest_env() as db:
+            opp = (
+                await db.execute(_select(Opportunity).where(Opportunity.award_id != "prior"))
+            ).scalars().first()
+        reasons = opp.lead_priority_reasons or []
+        assert "Low prior award history" not in reasons, (
+            "a supplier with a 9M prior award was scored as having low history"
+        )
+
+    async def test_the_score_is_recorded(self, ingest_env, tsa_stub, monkeypatch):
+        from sqlalchemy import select as _select
+
+        import app.jobs.award_check as award_check
+
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub))
+        await award_check.check_awards_for_watching()
+
+        async with ingest_env() as db:
+            opp = (await db.execute(_select(Opportunity))).scalars().one()
+        assert opp.lead_priority_score is not None and float(opp.lead_priority_score) > 0
+        assert opp.funding_suitability is not None

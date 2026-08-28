@@ -25,6 +25,7 @@ async def get_db():
 AWARD_COLUMNS: dict[str, str] = {
     "publication_date": "TIMESTAMPTZ",
     "source_created_at": "TIMESTAMPTZ",
+    "date_source": "VARCHAR(16)",
 }
 
 AWARD_INGESTION_STATE_COLUMNS: dict[str, str] = {
