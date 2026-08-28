@@ -42,6 +42,18 @@ class Settings(BaseSettings):
     log_json: bool = False
     sql_echo: bool = False
 
+    # Connection pool for the Oricred database. SQLAlchemy's defaults are 5 + 10
+    # with a 30s checkout timeout, which the scheduled jobs exhausted: two long
+    # ingest passes each hold a connection for their whole run, and everything
+    # else — including run_job's own bookkeeping — then times out. Ignored for
+    # SQLite, which does not use a queue pool.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: int = 30
+    # Below any sensible idle-connection timeout on a managed PostgreSQL, so a
+    # connection killed server-side is never handed to a job.
+    db_pool_recycle: int = 1800
+
     # Comma-separated allowed browser origins. Empty means same-origin only,
     # which is correct for the standard deployment where FastAPI serves the SPA.
     cors_origins: str = ""
