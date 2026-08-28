@@ -382,17 +382,12 @@ class TestBatching:
             counts[size] = issued
             await engine.dispose()
 
-        # Every upsert and context lookup is now batched, so the only queries
-        # that still scale with the batch are two per-company aggregates: the
-        # 12-month award total for funding suitability, and the prior-award
-        # count for lead priority. Both are genuine per-company reads over the
-        # awards table; batching them needs a GROUP BY and is tracked as
-        # follow-up work in remediation-04.
-        #
-        # Was roughly 7 local queries per award plus one remote call each.
+        # Every lookup and aggregate the loop needs is now batched, so the query
+        # count is flat in the size of the batch. Was roughly 7 local queries per
+        # award plus one remote call each — 285 local queries for 40 awards.
         marginal = (counts[40] - counts[2]) / (40 - 2)
-        assert marginal <= 3, (
-            f"{marginal:.1f} queries per additional award (expected <= 3): {counts}"
+        assert marginal == 0, (
+            f"{marginal:.2f} queries per additional award (expected 0): {counts}"
         )
 
     async def test_the_buyer_organisation_is_fetched_once_per_run(
@@ -433,3 +428,71 @@ class TestBatching:
         assert len(tenders) == 1, "the same tender was inserted twice"
         assert len(companies) == 1, "the same supplier was inserted twice"
         assert len(opps) == 2, "each award should still produce its own lead"
+
+
+class TestLeadScoringIsUnchanged:
+    """Pins the score the ingest loop produces.
+
+    Batching the per-supplier award aggregates moved when they are read. The old
+    code queried after inserting the current award, so "prior award history"
+    counted it; reading before the insert would not. These tests exist so that
+    difference cannot pass silently — the score drives which leads an operator
+    is shown first.
+    """
+
+    async def test_a_first_time_supplier_scores_as_low_history(
+        self, ingest_env, tsa_stub, monkeypatch
+    ):
+        from sqlalchemy import select as _select
+
+        import app.jobs.award_check as award_check
+
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub))
+        await award_check.check_awards_for_watching()
+
+        async with ingest_env() as db:
+            opp = (await db.execute(_select(Opportunity))).scalars().one()
+        assert "Low prior award history" in (opp.lead_priority_reasons or [])
+
+    async def test_a_supplier_with_prior_awards_scores_lower(
+        self, ingest_env, tsa_stub, monkeypatch
+    ):
+        """Two awards to one supplier: the second must see the first."""
+        from sqlalchemy import select as _select
+
+        import app.jobs.award_check as award_check
+        from app.models.award import Award
+
+        # A large prior award already on file for this supplier.
+        async with ingest_env() as db:
+            db.add(Award(
+                id="prior", api_id="prior", tender_id="t-prior", supplier_name="Sizwe Construction",
+                supplier_company_id="tsa-company-1", amount=9_000_000,
+                award_date=NOW_UTC, discovered_at=NOW_UTC, date_source="source",
+            ))
+            await db.commit()
+
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub))
+        await award_check.check_awards_for_watching()
+
+        async with ingest_env() as db:
+            opp = (
+                await db.execute(_select(Opportunity).where(Opportunity.award_id != "prior"))
+            ).scalars().first()
+        reasons = opp.lead_priority_reasons or []
+        assert "Low prior award history" not in reasons, (
+            "a supplier with a 9M prior award was scored as having low history"
+        )
+
+    async def test_the_score_is_recorded(self, ingest_env, tsa_stub, monkeypatch):
+        from sqlalchemy import select as _select
+
+        import app.jobs.award_check as award_check
+
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub))
+        await award_check.check_awards_for_watching()
+
+        async with ingest_env() as db:
+            opp = (await db.execute(_select(Opportunity))).scalars().one()
+        assert opp.lead_priority_score is not None and float(opp.lead_priority_score) > 0
+        assert opp.funding_suitability is not None

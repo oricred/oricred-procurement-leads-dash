@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.award import Award
@@ -10,6 +10,7 @@ from app.models.company import Company
 from app.models.contact import Contact
 from app.models.opportunity import Opportunity
 from app.models.tender import Tender
+from app.services.award_history import AwardHistory, load_one
 
 TARGET_MIN_AWARD = Decimal("500000")
 TARGET_MAX_AWARD = Decimal("20000000")
@@ -67,6 +68,7 @@ async def compute_lead_priority(
     award: Award | None = None,
     company: Company | None = None,
     contacts: list[Contact] | None = None,
+    history: AwardHistory | None = None,
 ) -> tuple[float, list[str], str]:
     contacts = contacts or []
     reasons: list[str] = []
@@ -111,12 +113,9 @@ async def compute_lead_priority(
         score += 20
         reasons.append(f"Small enterprise signal: {enterprise_type.upper()}")
     elif company:
-        history = await db.execute(
-            select(func.count(Award.id), func.coalesce(func.sum(Award.amount), 0))
-            .where(Award.supplier_company_id == company.api_id)
-        )
-        award_count, total_value = history.one()
-        total_value = Decimal(str(total_value or 0))
+        if history is None:
+            history = await load_one(company.api_id, db)
+        award_count, total_value = history.award_count, history.total_value
         if award_count <= 1 and total_value <= Decimal("5000000"):
             score += 15
             reasons.append("Low prior award history")
@@ -151,6 +150,7 @@ async def refresh_lead_scoring(
     award: Award | None = None,
     company: Company | None = None,
     contacts: list[Contact] | None = None,
+    history: AwardHistory | None = None,
 ) -> Opportunity:
     if tender is None and opp.tender_id:
         tender = await db.get(Tender, opp.tender_id)
@@ -169,7 +169,9 @@ async def refresh_lead_scoring(
         else:
             contacts = []
 
-    score, reasons, next_action = await compute_lead_priority(opp, db, tender, award, company, contacts)
+    score, reasons, next_action = await compute_lead_priority(
+        opp, db, tender, award, company, contacts, history
+    )
     opp.contact_sufficiency = classify_company_contacts(contacts)
     opp.lead_priority_score = score
     opp.lead_priority_reasons = reasons

@@ -31,6 +31,7 @@ from app.models.past_due import PastDueQueue
 from app.models.tender import Tender
 from app.models.watchlist import WatchlistItem
 from app.services.admin_config import get_config
+from app.services.award_history import AwardHistory, load_award_history
 from app.services.buyer_preference import compute_buyer_preference
 from app.services.contact_enrichment import RECOVERABLE
 from app.services.crm.sync import push_opportunity_to_crm
@@ -173,6 +174,19 @@ class IngestCache:
     opportunity_award_ids: set[str]
 
 
+def _supplier_api_ids(raw_awards: list[dict]) -> set[str]:
+    """Every Company.api_id this batch could resolve to.
+
+    Deterministic from the raw awards, so it is known before any company row
+    exists — which matters because the loop creates them as it goes.
+    """
+    ids = {
+        str(raw["supplier_canonical_id"]) for raw in raw_awards if raw.get("supplier_canonical_id")
+    }
+    ids |= {_supplier_fallback_api_id(raw.get("supplier_name") or "Unknown") for raw in raw_awards}
+    return ids
+
+
 async def _preload(db, raw_awards: list[dict], tender_by_api_id: dict) -> IngestCache:
     """Load the local rows this batch could touch, keyed for O(1) lookup."""
     tender_keys: set[str] = set()
@@ -185,12 +199,7 @@ async def _preload(db, raw_awards: list[dict], tender_by_api_id: dict) -> Ingest
                 tender_keys.add(str(reference))
 
     award_api_ids = {_award_api_id(raw) for raw in raw_awards}
-    supplier_ids = {
-        str(raw["supplier_canonical_id"]) for raw in raw_awards if raw.get("supplier_canonical_id")
-    }
-    supplier_ids |= {
-        _supplier_fallback_api_id(raw.get("supplier_name") or "Unknown") for raw in raw_awards
-    }
+    supplier_ids = _supplier_api_ids(raw_awards)
 
     tenders: dict[str, Tender] = {}
     if tender_keys:
@@ -476,6 +485,13 @@ async def check_awards_for_watching(backfill: bool = False):
             ).get("buyer_preference", {})
 
             cache = await _preload(db, raw_awards, tender_by_api_id)
+
+            # Prior-award aggregates for every supplier in the batch, in one
+            # grouped query. Lead scoring and funding suitability each ran their
+            # own aggregate per company otherwise.
+            award_history = await load_award_history(
+                sorted(_supplier_api_ids(raw_awards)), db
+            )
             await _sync_buyer_organizations(
                 db,
                 tsa_db,
@@ -543,10 +559,18 @@ async def check_awards_for_watching(backfill: bool = False):
                 opp.buyer_preference_score = await compute_buyer_preference(
                     str(opp.id), db, config=buyer_preference_config, opp=opp, tender=tender
                 )
-                opp.funding_suitability = await compute_funding_suitability(
-                    company.id, db, company=company
+                # Plus the award just inserted, matching what the per-lead
+                # query used to see.
+                history = (award_history.get(company.api_id) or AwardHistory()).including(
+                    award.amount, recent=resolved.value >= now - timedelta(days=365)
                 )
-                await refresh_lead_scoring(opp, db, tender=tender, award=award, company=company, contacts=[])
+                opp.funding_suitability = await compute_funding_suitability(
+                    company.id, db, company=company, history=history
+                )
+                await refresh_lead_scoring(
+                    opp, db, tender=tender, award=award, company=company,
+                    contacts=[], history=history,
+                )
                 opp.related_bidders = [
                     {"name": name, "inferred": False, "reason": "confirmed bidder"}
                     # Keyed by the Tenders-SA row UUID (a.tender_id == t.id),
