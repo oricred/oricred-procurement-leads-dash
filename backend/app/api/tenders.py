@@ -40,7 +40,8 @@ async def _compute_status_for_tender(tender_id: str, db: AsyncSession) -> tuple[
 
     pd = await db.execute(
         select(PastDueQueue.id).where(
-            PastDueQueue.tender_id == tender_id
+            PastDueQueue.tender_id == tender_id,
+            PastDueQueue.resolution == "pending",
         ).limit(1)
     )
     if pd.scalar_one_or_none():
@@ -81,7 +82,8 @@ def _apply_status_filter(query, status: str):
         return query.where(
             exists(
                 select(PastDueQueue.id).where(
-                    PastDueQueue.tender_id == Tender.id
+                    PastDueQueue.tender_id == Tender.id,
+                    PastDueQueue.resolution == "pending",
                 )
             )
         )
@@ -89,12 +91,14 @@ def _apply_status_filter(query, status: str):
         return query.where(
             ~exists(
                 select(WatchlistItem.id).where(
-                    WatchlistItem.tender_id == Tender.id
+                    WatchlistItem.tender_id == Tender.id,
+                    WatchlistItem.status.in_(("watching", "awarded", "past_due")),
                 )
             )
             & ~exists(
                 select(PastDueQueue.id).where(
-                    PastDueQueue.tender_id == Tender.id
+                    PastDueQueue.tender_id == Tender.id,
+                    PastDueQueue.resolution == "pending",
                 )
             )
             & ~exists(

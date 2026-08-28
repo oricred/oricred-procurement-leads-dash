@@ -5,6 +5,8 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.award import Award
+from app.models.company import Company
 from app.models.filter_config import FilterConfig
 from app.models.tender import Tender
 
@@ -120,13 +122,19 @@ class QualificationService:
     async def get_config(self) -> dict:
         import time
         now = time.time()
-        if self._config_cache is not None and now - self._config_cache_time < 60:
-            return self._config_cache
+        cls = type(self)
+        if cls._config_cache is not None and now - cls._config_cache_time < 60:
+            return cls._config_cache
         result = await self.db.execute(select(FilterConfig).where(FilterConfig.key == "qualification"))
         row = result.scalar_one_or_none()
-        config = row.value if row else {}
-        self._config_cache = config
-        self._config_cache_time = now
+        if row is None:
+            config = self.default_config()
+        elif not row.enabled:
+            config = {}
+        else:
+            config = row.value
+        cls._config_cache = config
+        cls._config_cache_time = now
         return config
 
     async def evaluate(self, tender: Tender) -> FilterResult:
@@ -154,6 +162,81 @@ class QualificationService:
             if not result.passed:
                 logger.info("filter_rejected", filter=filter_name, reason=result.reason, tender_id=tender.api_id)
                 return result
+
+        return FilterResult(passed=True)
+
+    async def evaluate_award_lead(
+        self,
+        tender: Tender,
+        award: Award,
+        company: Company,
+    ) -> FilterResult:
+        """Apply the configured business filters to an automatic award lead.
+
+        Award value replaces the pre-award tender estimate. Supplier-only B-BBEE
+        and risk rules are evaluated here because those facts do not exist during
+        tender discovery.
+        """
+        config = await self.get_config()
+        if not config:
+            return FilterResult(passed=True)
+
+        tender_handlers: dict[str, FilterHandler] = {
+            "sector": SectorFilter(),
+            "province": ProvinceFilter(),
+            "entity_type": EntityTypeFilter(),
+            "preference": PreferenceFilter(),
+        }
+        for filter_name, filter_def in config.items():
+            if not filter_def.get("enabled", True):
+                continue
+            rules = filter_def.get("rules", [])
+
+            if filter_name == "value_range":
+                if award.amount is None:
+                    return FilterResult(False, filter_name, "Award value is missing")
+                value = Decimal(str(award.amount))
+                for rule in rules:
+                    minimum = rule.get("min")
+                    maximum = rule.get("max")
+                    if minimum is not None and value < Decimal(str(minimum)):
+                        return FilterResult(False, filter_name, f"Below minimum {minimum}")
+                    if maximum is not None and value > Decimal(str(maximum)):
+                        return FilterResult(False, filter_name, f"Above maximum {maximum}")
+                continue
+
+            if filter_name == "bee_level":
+                level = company.bee_level if company.bee_level is not None else award.bee_level
+                for rule in rules:
+                    minimum = rule.get("min_level")
+                    maximum = rule.get("max_level")
+                    min_points = rule.get("min_points")
+                    if level is not None and minimum is not None and level < int(minimum):
+                        return FilterResult(False, filter_name, f"B-BBEE level {level} below {minimum}")
+                    if level is not None and maximum is not None and level > int(maximum):
+                        return FilterResult(False, filter_name, f"B-BBEE level {level} above {maximum}")
+                    if award.bee_points is not None and min_points is not None and award.bee_points < int(min_points):
+                        return FilterResult(False, filter_name, f"B-BBEE points below {min_points}")
+                continue
+
+            if filter_name == "risk_exclusion":
+                for rule in rules:
+                    if rule.get("exclude_if_restricted") and company.restricted_supplier:
+                        return FilterResult(False, filter_name, "Supplier is restricted")
+                    maximum = rule.get("max_forensic_score")
+                    if (
+                        maximum is not None
+                        and company.cipc_forensic_risk_score is not None
+                        and Decimal(str(company.cipc_forensic_risk_score)) > Decimal(str(maximum))
+                    ):
+                        return FilterResult(False, filter_name, f"Forensic risk exceeds {maximum}")
+                continue
+
+            handler = tender_handlers.get(filter_name)
+            if handler:
+                result = await handler.evaluate(tender, rules, self.db)
+                if not result.passed:
+                    return result
 
         return FilterResult(passed=True)
 

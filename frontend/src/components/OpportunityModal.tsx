@@ -178,9 +178,8 @@ export default function OpportunityModal({ opportunity: initialOpportunity, onCl
         setFindContactFeedback('No contacts on file at Tenders-SA for this supplier');
         setShowManualGuidance(true);
       }
-      // The modal reads ['opportunity', id]; the pipeline board reads
-      // ['opportunities']. A filter key longer than the query key never matches,
-      // so the previous ['opportunities', id] refreshed neither.
+      // Same three keys main arrived at independently, via the shared helper
+      // used by the five mutations in this component.
       invalidateOpportunityViews();
       setTimeout(() => setFindContactFeedback(null), 6000);
     },

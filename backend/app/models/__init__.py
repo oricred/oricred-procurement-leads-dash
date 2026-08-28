@@ -8,6 +8,7 @@ from app.models.contact import Contact
 from app.models.failed_api_call import FailedApiCall
 from app.models.filter_config import FilterConfig
 from app.models.historical_contact import HistoricalContact
+from app.models.historical_ingestion_state import HistoricalIngestionState
 from app.models.job_run import JobRun
 from app.models.opportunity import Opportunity, OpportunityAudit
 from app.models.organization import Organization
@@ -37,4 +38,5 @@ __all__ = [
     "BuyerRelationship",
     "Contact",
     "HistoricalContact",
+    "HistoricalIngestionState",
 ]

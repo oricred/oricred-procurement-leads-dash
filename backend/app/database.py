@@ -27,6 +27,11 @@ AWARD_COLUMNS: dict[str, str] = {
     "source_created_at": "TIMESTAMPTZ",
 }
 
+AWARD_INGESTION_STATE_COLUMNS: dict[str, str] = {
+    "legacy_after_id": "VARCHAR(64)",
+    "legacy_recovery_complete": "BOOLEAN NOT NULL DEFAULT FALSE",
+}
+
 OPPORTUNITY_COLUMNS = {
     "buyer_preference_score": "NUMERIC(5,2)",
     "related_bidders": "JSON",
@@ -40,6 +45,7 @@ OPPORTUNITY_COLUMNS = {
     "lost_reason": "TEXT",
     "conditions_checklist": "JSON",
     "needs_enrichment": "BOOLEAN NOT NULL DEFAULT FALSE",
+    "lead_origin": "VARCHAR(16) NOT NULL DEFAULT 'automatic'",
 }
 
 
@@ -91,6 +97,33 @@ async def _ensure_award_columns() -> None:
             )
 
 
+async def _ensure_award_ingestion_state_columns() -> None:
+    async with engine.begin() as conn:
+        if conn.dialect.name == "sqlite":
+            existing = {
+                row[1]
+                for row in (
+                    await conn.execute(text("PRAGMA table_info(award_ingestion_state)"))
+                ).fetchall()
+            }
+            for name, definition in AWARD_INGESTION_STATE_COLUMNS.items():
+                if name not in existing:
+                    await conn.execute(
+                        text(
+                            f"ALTER TABLE award_ingestion_state "
+                            f"ADD COLUMN {name} {definition}"
+                        )
+                    )
+            return
+        for name, definition in AWARD_INGESTION_STATE_COLUMNS.items():
+            await conn.execute(
+                text(
+                    f"ALTER TABLE award_ingestion_state "
+                    f"ADD COLUMN IF NOT EXISTS {name} {definition}"
+                )
+            )
+
+
 async def _ensure_contact_indexes() -> None:
     """Replace the full unique constraints on contacts with partial ones.
 
@@ -99,6 +132,9 @@ async def _ensure_contact_indexes() -> None:
     empty string, so only one phone-only contact could exist per company and
     every subsequent enriched director was rejected with an IntegrityError that
     the caller logged as a warning. See remediation-01 section 3.
+
+    Supersedes the earlier _ensure_contact_email_nullable: this does the same
+    NULL rewrite and DROP NOT NULL, then adds the partial indexes.
 
     create_all() skips existing tables entirely, indexes included, so deployed
     databases need this explicit DDL. Idempotent.
@@ -133,5 +169,6 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
     await _ensure_opportunity_columns()
     await _ensure_award_columns()
+    await _ensure_award_ingestion_state_columns()
     await _ensure_contact_indexes()
     logger.info("database_ready", dialect=engine.dialect.name)

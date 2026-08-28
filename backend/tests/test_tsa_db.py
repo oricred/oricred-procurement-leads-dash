@@ -1,4 +1,5 @@
 from app.clients.tsa_db import (
+    AWARD_FIELD_MAP,
     TENDER_FIELD_MAP,
     _build_award_where,
     _build_company_where,
@@ -19,6 +20,11 @@ class TestMapFields:
         assert "t.title AS title" in result
         assert "t.province AS province" in result
         assert "t.estimated_value" not in result
+
+    def test_award_publication_date_is_schema_safe(self):
+        result = _map_fields(AWARD_FIELD_MAP, ["publication_date"])
+        assert "to_jsonb(a)" in result
+        assert "AS publication_date" in result
 
     def test_unknown_field_skipped(self):
         result = _map_fields(TENDER_FIELD_MAP, ["title", "nonexistent"])
@@ -97,6 +103,21 @@ class TestBuildTenderWhere:
 
 
 class TestBuildAwardWhere:
+    def test_source_created_cursor_only_selects_cursor_bearing_rows(self):
+        where, params, join = _build_award_where({"created_since": "2026-01-01"})
+        assert "a.created_at >= :created_since" in where
+        assert "created_at IS NULL" not in where
+        assert params["created_since"] == "2026-01-01"
+
+    def test_legacy_awards_use_a_durable_id_keyset(self):
+        where, params, join = _build_award_where({
+            "created_is_null": True,
+            "legacy_after_id": "award-100",
+        })
+        assert "a.created_at IS NULL" in where
+        assert "CAST(a.id AS TEXT) > :legacy_after_id" in where
+        assert params["legacy_after_id"] == "award-100"
+
     def test_tender_ids_filter(self):
         where, params, join = _build_award_where({"tender_ids": ["id1", "id2"]})
         assert "a.tender_id = ANY(:tender_ids)" in where

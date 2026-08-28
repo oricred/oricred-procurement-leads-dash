@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.award import Award
 from app.models.buyer_relationship import BuyerRelationship
+from app.models.company import Company
 from app.models.opportunity import Opportunity, OpportunityAudit
 from app.models.tender import Tender
 
@@ -13,8 +14,13 @@ async def compute_relationship(
     company_id: str,
     organization_id: str,
     db: AsyncSession,
-) -> BuyerRelationship:
+) -> BuyerRelationship | None:
     cutoff = datetime.now(timezone.utc) - timedelta(days=365)
+    company = await db.get(Company, company_id)
+    if company is None:
+        # company_id carries no foreign key, so it can dangle. Computing anyway
+        # would cache an all-zero relationship that reads as a real verdict.
+        return None
 
     award_counts = await db.execute(
         select(
@@ -24,7 +30,7 @@ async def compute_relationship(
         .select_from(Award)
         .join(Tender, Tender.id == Award.tender_id)
         .where(Tender.buyer_org_id == organization_id)
-        .where(Award.supplier_company_id.isnot(None))
+        .where(Award.supplier_company_id == company.api_id)
         .where(Award.award_date >= cutoff)
     )
     award_count, total_value = award_counts.one()
@@ -52,8 +58,10 @@ async def compute_relationship(
             func.count(Opportunity.id).filter(Opportunity.kanban_stage == "funded"),
             func.count(Opportunity.id),
         )
+        .select_from(Opportunity)
+        .join(Tender, Tender.id == Opportunity.tender_id)
         .where(Opportunity.company_id == company_id)
-        .where(Opportunity.tender_id.isnot(None))
+        .where(Tender.buyer_org_id == organization_id)
     )
     funded_count, total_opps = win_data.one()
     win_rate = (funded_count / total_opps) if total_opps > 0 else None
@@ -71,8 +79,8 @@ async def compute_relationship(
     if rel:
         rel.award_count_12m = award_count
         rel.total_award_value_12m = float(total_value) if total_value else None
-        rel.avg_response_days = float(avg_response) if avg_response else None
-        rel.win_rate = float(win_rate) if win_rate else None
+        rel.avg_response_days = float(avg_response) if avg_response is not None else None
+        rel.win_rate = float(win_rate) if win_rate is not None else None
         rel.relevance_score = relevance
         rel.updated_at = datetime.now(timezone.utc)
     else:
@@ -81,8 +89,8 @@ async def compute_relationship(
             organization_id=organization_id,
             award_count_12m=award_count,
             total_award_value_12m=float(total_value) if total_value else None,
-            avg_response_days=float(avg_response) if avg_response else None,
-            win_rate=float(win_rate) if win_rate else None,
+            avg_response_days=float(avg_response) if avg_response is not None else None,
+            win_rate=float(win_rate) if win_rate is not None else None,
             relevance_score=relevance,
         )
         db.add(rel)

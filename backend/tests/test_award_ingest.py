@@ -183,12 +183,16 @@ class TestRelatedBidders:
 
 
 class TestIngestCursor:
-    """The H1 regression, against the persisted cursor rather than a model of it.
+    """The H1 regression, against the persisted cursor.
 
-    The unit tests in test_award_check.py cover _resolve_award_date's provenance
-    flag. These assert what check_awards_for_watching actually writes to
-    award_ingestion_state, which is the value that decides what the next run
-    asks Tenders-SA for.
+    The original defect: the watermark was taken from the *resolved* award date,
+    whose last-resort branch is "now", so one unparseable date pushed the cursor
+    to today and every award published later with an older award_date was
+    permanently skipped.
+
+    The cursor now reads the source row's created_at — a monotonic ingestion
+    timestamp rather than a procurement event — so a bad award_date cannot
+    reach it at all. Every run also re-reads a full lookback window.
     """
 
     @staticmethod
@@ -199,52 +203,84 @@ class TestIngestCursor:
             state = await db.get(AwardIngestionState, "tenders_sa")
         return state.latest_award_at if state else None
 
-    async def test_one_corrupt_date_does_not_drag_the_cursor_to_today(
+    async def test_a_corrupt_award_date_cannot_move_the_cursor(
         self, ingest_env, tsa_stub, monkeypatch
     ):
         import app.jobs.award_check as award_check
 
-        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub, awards=[
-            _award("a1", "Alpha Co", "2026-06-01"),
-            _award("a2", "Beta Co", "2026-06-10"),
-            # Nothing usable: a corrupt year AND no created_at, so the resolver
-            # must synthesise a date from discovered_at, which is ~now. This is
-            # the row that used to drag the cursor forward.
-            {**_award("a3", "Gamma Co", "2099-10-09"), "created_at": None},
-        ]))
+        awards = [
+            {**_award("a1", "Alpha Co", "2026-06-01"), "created_at": "2026-06-02T08:00:00+00:00"},
+            # Unusable award_date and no created_at: the resolver must synthesise
+            # a date near now, and that must not become the watermark.
+            {**_award("a2", "Beta Co", "2099-10-09"), "created_at": None},
+        ]
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub, awards=awards))
         await award_check.check_awards_for_watching()
 
         cursor = await self._cursor(ingest_env)
         assert cursor is not None
-        assert cursor.date().isoformat() == "2026-06-10", (
-            f"cursor was dragged to {cursor} by a synthesised date; the next run "
-            "would skip every award published later with an older award_date"
+        assert cursor.date().isoformat() == "2026-06-02", (
+            f"cursor moved to {cursor} on a synthesised date; the next run would "
+            "skip every award published later with an older date"
         )
 
-    async def test_cursor_tracks_the_newest_source_backed_date(
+    async def test_the_cursor_tracks_the_newest_source_timestamp(
         self, ingest_env, tsa_stub, monkeypatch
     ):
         import app.jobs.award_check as award_check
 
-        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub, awards=[
-            _award("a1", "Alpha Co", "2026-06-01"),
-            _award("a2", "Beta Co", "2026-08-20"),
-            _award("a3", "Gamma Co", "2026-07-04"),
-        ]))
+        awards = [
+            {**_award("a1", "Alpha Co"), "created_at": "2026-06-02T08:00:00+00:00"},
+            {**_award("a2", "Beta Co"), "created_at": "2026-08-20T08:00:00+00:00"},
+            {**_award("a3", "Gamma Co"), "created_at": "2026-07-04T08:00:00+00:00"},
+        ]
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub, awards=awards))
         await award_check.check_awards_for_watching()
 
         cursor = await self._cursor(ingest_env)
         assert cursor.date().isoformat() == "2026-08-20"
 
-    async def test_a_batch_of_only_corrupt_dates_leaves_the_cursor_unset(
+    async def test_the_award_date_never_reaches_the_cursor(
         self, ingest_env, tsa_stub, monkeypatch
     ):
-        """Better to re-read the lookback window than to skip forward blindly."""
+        """A far-future award_date with an ordinary created_at must leave the
+        watermark on the created_at."""
         import app.jobs.award_check as award_check
 
-        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub, awards=[
-            {**_award("a1", "Alpha Co", "2099-01-01"), "created_at": None},
-        ]))
+        awards = [
+            {**_award("a1", "Alpha Co", "2099-01-01"), "created_at": "2026-06-02T08:00:00+00:00"},
+        ]
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub, awards=awards))
         await award_check.check_awards_for_watching()
 
-        assert await self._cursor(ingest_env) is None
+        cursor = await self._cursor(ingest_env)
+        assert cursor.date().isoformat() == "2026-06-02"
+
+    async def test_a_second_run_re_reads_a_lookback_window(
+        self, ingest_env, tsa_stub, monkeypatch
+    ):
+        """The overlap is what stops a late-published award falling through the
+        boundary between two runs."""
+        import app.jobs.award_check as award_check
+
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: _stub(tsa_stub))
+        await award_check.check_awards_for_watching()
+        cursor_after_first = await self._cursor(ingest_env)
+
+        stub2 = _stub(tsa_stub)
+        monkeypatch.setattr(award_check, "TSADatabase", lambda: stub2)
+        await award_check.check_awards_for_watching()
+
+        # The award query filters on the source row's created_at, so the bind
+        # parameter is created_since rather than since.
+        since_values = [
+            params["created_since"] for _sql, params in stub2.calls if "created_since" in params
+        ]
+        assert since_values, "no created_since filter was sent on the second run"
+        watermark = cursor_after_first.replace(tzinfo=None)
+        assert min(since_values) < watermark, (
+            "the second run started at the watermark with no overlap, so a "
+            "late-published older award would fall through the boundary"
+        )
+
+

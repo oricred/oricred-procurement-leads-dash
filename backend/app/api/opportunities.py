@@ -1,9 +1,10 @@
 from collections import defaultdict
 from datetime import datetime, timezone
+from itertools import islice
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
@@ -32,9 +33,12 @@ from app.services.crm.sync import push_opportunity_to_crm
 from app.services.funding_suitability import compute_funding_suitability
 from app.services.lead_scoring import choose_primary_contact
 from app.services.lead_service import (
+    StageConflictError,
+    VersionConflictError,
     mark_opportunity_contacted,
     retry_contact_lookup_for_opportunity,
 )
+from app.utils import as_utc
 from app.workflow import LEGACY_STAGE_MAP, WORKFLOW_NEXT, is_workflow_stage, normalize_stage
 
 logger = structlog.get_logger()
@@ -63,6 +67,11 @@ async def _load_opportunity_contacts(opp: Opportunity, db: AsyncSession) -> list
     return [ContactRead.model_validate(c) for c in contacts]
 
 
+def _batched_ids(ids: set[str], size: int = 1000):
+    it = iter(ids)
+    return [list(islice(it, size)) for _ in range((len(ids) + size - 1) // size)]
+
+
 async def _batch_load_opportunity_context(opportunities: list[Opportunity], db: AsyncSession) -> dict[str, dict]:
     """Batch-load all related entities for a list of opportunities — fixes N+1."""
     tender_ids = {o.tender_id for o in opportunities if o.tender_id}
@@ -71,44 +80,51 @@ async def _batch_load_opportunity_context(opportunities: list[Opportunity], db: 
 
     tenders: dict[str, Tender] = {}
     if tender_ids:
-        for t in (await db.execute(select(Tender).where(Tender.id.in_(tender_ids)))).scalars().all():
-            tenders[t.id] = t
+        for batch in _batched_ids(tender_ids):
+            for t in (await db.execute(select(Tender).where(Tender.id.in_(batch)))).scalars().all():
+                tenders[t.id] = t
 
     awards: dict[str, Award] = {}
     if award_ids:
-        for a in (await db.execute(select(Award).where(Award.id.in_(award_ids)))).scalars().all():
-            awards[a.id] = a
+        for batch in _batched_ids(award_ids):
+            for a in (await db.execute(select(Award).where(Award.id.in_(batch)))).scalars().all():
+                awards[a.id] = a
 
     companies: dict[str, Company] = {}
     if company_ids:
-        for c in (await db.execute(select(Company).where(Company.id.in_(company_ids)))).scalars().all():
-            companies[c.id] = c
+        for batch in _batched_ids(company_ids):
+            for c in (await db.execute(select(Company).where(Company.id.in_(batch)))).scalars().all():
+                companies[c.id] = c
 
     org_ids = {t.buyer_org_id for t in tenders.values() if t.buyer_org_id}
     orgs: dict[str, Organization] = {}
     if org_ids:
-        for o in (await db.execute(select(Organization).where(Organization.id.in_(org_ids)))).scalars().all():
-            orgs[o.id] = o
+        for batch in _batched_ids(org_ids):
+            for o in (await db.execute(select(Organization).where(Organization.id.in_(batch)))).scalars().all():
+                orgs[o.id] = o
 
     category_ids = {t.category_id for t in tenders.values() if t.category_id}
     categories: dict[str, Category] = {}
     if category_ids:
-        for cat in (await db.execute(select(Category).where(Category.id.in_(category_ids)))).scalars().all():
-            categories[cat.id] = cat
+        for batch in _batched_ids(category_ids):
+            for cat in (await db.execute(select(Category).where(Category.id.in_(batch)))).scalars().all():
+                categories[cat.id] = cat
 
     contacts_by_company: dict[str, list[Contact]] = defaultdict(list)
     if company_ids:
-        for c in (await db.execute(
-            select(Contact).where(Contact.company_id.in_(company_ids)).order_by(Contact.is_primary.desc(), Contact.last_name)
-        )).scalars().all():
-            contacts_by_company[c.company_id].append(c)
+        for batch in _batched_ids(company_ids):
+            for c in (await db.execute(
+                select(Contact).where(Contact.company_id.in_(batch)).order_by(Contact.is_primary.desc(), Contact.last_name)
+            )).scalars().all():
+                contacts_by_company[c.company_id].append(c)
 
     contacts_by_org: dict[str, list[Contact]] = defaultdict(list)
     if org_ids:
-        for c in (await db.execute(
-            select(Contact).where(Contact.organization_id.in_(org_ids)).order_by(Contact.is_primary.desc(), Contact.last_name)
-        )).scalars().all():
-            contacts_by_org[c.organization_id].append(c)
+        for batch in _batched_ids(org_ids):
+            for c in (await db.execute(
+                select(Contact).where(Contact.organization_id.in_(batch)).order_by(Contact.is_primary.desc(), Contact.last_name)
+            )).scalars().all():
+                contacts_by_org[c.organization_id].append(c)
 
     result: dict[str, dict] = {}
     for opp in opportunities:
@@ -138,8 +154,9 @@ async def _batch_load_opportunity_context(opportunities: list[Opportunity], db: 
 
 def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: Award | None = None, company: Company | None = None, contacts: list[ContactRead] | None = None, buyer_org_name: str | None = None, category_name: str | None = None) -> OpportunityRead:
     days_since = None
-    if award and award.award_date:
-        days_since = (datetime.now(timezone.utc) - award.award_date).days
+    award_date = as_utc(award.award_date) if award else None
+    if award_date:
+        days_since = (datetime.now(timezone.utc) - award_date).days
 
     return OpportunityRead(
         id=str(opp.id),
@@ -184,27 +201,45 @@ def _opportunity_to_read(opp: Opportunity, tender: Tender | None = None, award: 
 
 @router.get("", response_model=OpportunityList)
 async def list_opportunities(
-    stage: str | None = Query(None),
+    stage: list[str] | None = Query(None),
     assigned_to: str | None = Query(None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
+    """List opportunities, optionally narrowed to one or more stages.
+
+    ``stage`` may be repeated so the pipeline board can page each phase column
+    independently — a single global page drops late-stage deals off the board
+    once the table outgrows the limit.
+    """
     q = select(Opportunity)
     if stage:
-        stage = normalize_stage(stage)
-        if not is_workflow_stage(stage):
-            raise HTTPException(status_code=400, detail="Invalid opportunity stage")
-        stage_values = [stage] + [legacy for legacy, canonical in LEGACY_STAGE_MAP.items() if canonical == stage]
+        stage_values: list[str] = []
+        for requested in stage:
+            canonical = normalize_stage(requested)
+            if not is_workflow_stage(canonical):
+                raise HTTPException(status_code=400, detail="Invalid opportunity stage")
+            stage_values.append(canonical)
+            stage_values.extend(
+                legacy for legacy, mapped in LEGACY_STAGE_MAP.items() if mapped == canonical
+            )
         q = q.where(Opportunity.kanban_stage.in_(stage_values))
     if assigned_to:
         q = q.where(Opportunity.assigned_to == assigned_to)
     q = q.order_by(Opportunity.lead_priority_score.desc().nulls_last(), Opportunity.buyer_preference_score.desc().nulls_last(), Opportunity.updated_at.desc())
 
+    count_q = select(func.count()).select_from(q.subquery())
+    total_result = await db.execute(count_q)
+    total = total_result.scalar() or 0
+
+    q = q.limit(limit).offset(offset)
     result = await db.execute(q)
     opportunities = result.scalars().all()
     context = await _batch_load_opportunity_context(opportunities, db)
 
     items = [_opportunity_to_read(opp, **context[opp.id]) for opp in opportunities]
-    return OpportunityList(items=items, total=len(items))
+    return OpportunityList(items=items, total=total)
 
 
 @router.post("/{opportunity_id}/transition", response_model=OpportunityRead)
@@ -263,6 +298,9 @@ async def transition_opportunity(
         opp.closed_at = datetime.now(timezone.utc)
     elif action == "reopen":
         opp.closed_at = None
+        opp.lost_reason = None
+        opp.credit_decision = None
+        opp.conditions_checklist = None
     db.add(OpportunityAudit(opportunity_id=opp.id, from_stage=old_stage, to_stage=new_stage, changed_by=current_user["name"]))
     await db.commit()
     await db.refresh(opp)
@@ -357,10 +395,14 @@ async def mark_contacted(
             note=body.note,
             changed_by=current_user["name"],
         )
-    except ValueError:
-        raise HTTPException(status_code=404, detail="Opportunity not found")
-    except RuntimeError as e:
+    except VersionConflictError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except StageConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        # Missing opportunity, or a contact that belongs to someone else.
+        detail = str(e)
+        raise HTTPException(status_code=404 if "not found" in detail.lower() else 400, detail=detail)
     try:
         await push_opportunity_to_crm(opportunity_id)
     except Exception:
@@ -380,6 +422,7 @@ async def assign_opportunity(opportunity_id: str, assignee: str, db: AsyncSessio
         raise HTTPException(status_code=400, detail="Assignee must be an active user")
     opp.assigned_to = str(target.id) if target else None
     opp.updated_at = datetime.now(timezone.utc)
+    opp.version += 1
     await db.commit()
     try:
         await push_opportunity_to_crm(opportunity_id)

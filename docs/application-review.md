@@ -127,7 +127,7 @@ Both classify tenders via keyword match (construction, IT, consulting, security,
 | `auth` | POST login, GET me, GET assignees | None / JWT |
 | `opportunities` | GET list, GET by id, PATCH update, POST transition, POST mark-contacted, POST find-contact, PATCH assign, GET audit, GET relationship, POST compute-funding, POST compute-preference, GET crm-activity | JWT |
 | `leads` | GET list, GET export, POST contact-import/preview, POST contact-import/apply | JWT |
-| `awards` | GET list, GET export, POST create-lead | JWT |
+| `awards` | GET list, GET export, POST `/awards/{id}/lead` | JWT |
 | `tenders` | GET list, GET provinces | JWT |
 | `watchlist` | GET list, POST toggle | JWT |
 | `radar` | GET (7-day feed + past-due count) | JWT |
